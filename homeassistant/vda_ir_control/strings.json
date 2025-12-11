@@ -1,0 +1,120 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "VDA IR Control Setup",
+        "description": "Choose how you want to add an IR controller board.",
+        "data": {
+          "setup_method": "Setup Method"
+        }
+      },
+      "discover": {
+        "title": "Select Board",
+        "description": "Found {boards_found} IR controller board(s). Select the one you want to add.",
+        "data": {
+          "board": "Board"
+        }
+      },
+      "manual": {
+        "title": "Manual Entry",
+        "description": "Enter the IP address of the IR controller board.",
+        "data": {
+          "ip_address": "IP Address"
+        }
+      },
+      "adopt": {
+        "title": "Configure Board",
+        "description": "Configure the board details:\n\nIP Address: {ip_address}\nMAC Address: {mac_address}",
+        "data": {
+          "board_id": "Board ID",
+          "board_name": "Board Name"
+        }
+      }
+    },
+    "error": {
+      "no_boards_found": "No IR controller boards found on the network. Make sure the board is powered on and connected via Ethernet.",
+      "no_board_selected": "Please select a board to continue.",
+      "cannot_connect": "Cannot connect to board at the specified IP address. Make sure the board is powered on and reachable.",
+      "invalid_ip": "Please enter a valid IP address.",
+      "invalid_board_id": "Please enter a valid board ID.",
+      "invalid_board_name": "Please enter a valid board name.",
+      "adoption_failed": "Failed to adopt the board. Make sure the board is reachable and try again.",
+      "already_configured": "This board is already configured."
+    },
+    "abort": {
+      "no_boards_found": "No IR controller boards found on the network",
+      "no_board_selected": "No board was selected",
+      "adoption_failed": "Failed to adopt board",
+      "already_configured": "This board is already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "board_options": {
+        "title": "Board Configuration",
+        "description": "Update board settings",
+        "data": {
+          "board_name": "Board Name"
+        }
+      }
+    }
+  },
+  "services": {
+    "send_ir_code": {
+      "name": "Send IR Code",
+      "description": "Send an IR code to a specific board output",
+      "fields": {
+        "board_id": {
+          "name": "Board ID",
+          "description": "The ID of the IR controller board"
+        },
+        "output": {
+          "name": "Output",
+          "description": "The output number (1-30)"
+        },
+        "code": {
+          "name": "IR Code",
+          "description": "The IR code to send (raw hex or protocol string)"
+        }
+      }
+    },
+    "test_output": {
+      "name": "Test Output",
+      "description": "Send a test signal to an IR output",
+      "fields": {
+        "board_id": {
+          "name": "Board ID",
+          "description": "The ID of the IR controller board"
+        },
+        "output": {
+          "name": "Output",
+          "description": "The output number (1-30)"
+        },
+        "duration_ms": {
+          "name": "Duration",
+          "description": "Duration of the test signal in milliseconds (100-5000)"
+        }
+      }
+    },
+    "discover_boards": {
+      "name": "Discover Boards",
+      "description": "Scan the network for IR controller boards",
+      "fields": {
+        "subnet": {
+          "name": "Subnet",
+          "description": "The subnet to scan (e.g., 192.168.1)"
+        }
+      }
+    },
+    "get_board_status": {
+      "name": "Get Board Status",
+      "description": "Get the current status of an IR controller board",
+      "fields": {
+        "board_id": {
+          "name": "Board ID",
+          "description": "The ID of the IR controller board"
+        }
+      }
+    }
+  }
+}

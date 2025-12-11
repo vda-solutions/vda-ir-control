@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Home Assistant config (runtime files - keep custom_components source)
+config/.storage/
+config/home-assistant_v2.db
+config/home-assistant.log*
+config/*.log
+config/tts/
+config/blueprints/
+config/custom_components/vda_ir_control/__pycache__/
+config/.HA_VERSION
+config/.ha_run.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+*.log.*
+/tmp/
+
+# Environment
+.env
+.env.local
+
+# Test files
+/nohup.out
+
+# Mosquitto data
+mosquitto/data/

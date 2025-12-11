@@ -157,11 +157,16 @@ After completing changes that warrant a new version:
    cd firmware && pio run
    ```
 
-3. **Copy binaries to releases folder**:
+3. **Copy binaries to releases folder with version suffix**:
    ```bash
-   cp firmware/.pio/build/esp32-poe-iso/firmware.bin releases/firmware-esp32-poe-iso.bin
-   cp firmware/.pio/build/esp32-devkit/firmware.bin releases/firmware-esp32-devkit-wifi.bin
+   VERSION="X.Y.Z"  # e.g., "1.1.0"
+   cp firmware/.pio/build/esp32-poe-iso/firmware.bin "releases/firmware-esp32-poe-iso-v${VERSION}.bin"
+   cp firmware/.pio/build/esp32-devkit/firmware.bin "releases/firmware-esp32-devkit-wifi-v${VERSION}.bin"
    ```
+
+   **Firmware naming convention**: `firmware-<board>-v<version>.bin`
+   - `firmware-esp32-poe-iso-v1.1.0.bin`
+   - `firmware-esp32-devkit-wifi-v1.1.0.bin`
 
 4. **Commit changes**:
    ```bash
@@ -176,17 +181,19 @@ After completing changes that warrant a new version:
 
 6. **Create GitHub Release** (for significant releases):
    ```bash
+   VERSION="X.Y.Z"
+
    # Create release
-   gh release create vX.Y.Z \
-     --title "vX.Y.Z" \
+   gh release create v${VERSION} \
+     --title "v${VERSION}" \
      --notes "## Changes
    - Change 1
    - Change 2"
 
-   # Upload firmware binaries
-   gh release upload vX.Y.Z \
-     releases/firmware-esp32-poe-iso.bin \
-     releases/firmware-esp32-devkit-wifi.bin
+   # Upload firmware binaries (with version in filename)
+   gh release upload v${VERSION} \
+     "releases/firmware-esp32-poe-iso-v${VERSION}.bin" \
+     "releases/firmware-esp32-devkit-wifi-v${VERSION}.bin"
    ```
 
 ### Automatic Actions
@@ -195,10 +202,13 @@ When the user requests changes to the firmware or integration code, Claude shoul
 
 1. Make the requested code changes
 2. Determine if a version bump is warranted (new features = yes, bug fixes = yes, minor refactors = no)
-3. If bumping version: update all version locations, rebuild firmware, copy binaries
+3. If bumping version:
+   - Update all version locations (main.cpp banner, main.cpp JSON response, manifest.json)
+   - Rebuild firmware for both environments
+   - Copy binaries to releases folder **with version suffix** (e.g., `firmware-esp32-devkit-wifi-v1.2.0.bin`)
 4. Commit with a descriptive message
 5. Push to GitHub
-6. For significant releases (new features, important fixes), create a GitHub Release with binaries
+6. For significant releases (new features, important fixes), create a GitHub Release with versioned binaries
 
 ### Repository Info
 

@@ -70,7 +70,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     board_id = entry.data["board_id"]
     ip_address = entry.data["ip_address"]
     mac_address = entry.data["mac_address"]
-    port = entry.data.get("port", 8080)
+    port = entry.data.get("port", 80)
 
     coordinator = VDAIRBoardCoordinator(
         hass,

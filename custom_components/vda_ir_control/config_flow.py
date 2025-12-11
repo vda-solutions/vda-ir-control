@@ -155,7 +155,7 @@ class VdaIrControlConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             "board_name": board_name,
                             "ip_address": ip_address,
                             "mac_address": mac_address,
-                            "port": 8080,
+                            "port": 80,
                             "output_count": self.selected_board.get("output_count", 5),
                         },
                     )
@@ -221,7 +221,7 @@ class VdaIrControlConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         try:
             session = async_get_clientsession(self.hass)
             async with asyncio.timeout(DISCOVERY_TIMEOUT):
-                async with session.get(f"http://{ip_address}:8080/info") as resp:
+                async with session.get(f"http://{ip_address}/info") as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         if "board_id" in data and "mac_address" in data:
@@ -241,7 +241,7 @@ class VdaIrControlConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             session = async_get_clientsession(self.hass)
             async with asyncio.timeout(5):
                 async with session.post(
-                    f"http://{ip_address}:8080/adopt",
+                    f"http://{ip_address}/adopt",
                     json={"board_id": board_id, "board_name": board_name},
                 ) as resp:
                     if resp.status == 200:

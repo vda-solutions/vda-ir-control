@@ -40,7 +40,7 @@ class BoardConfig:
     board_name: str
     ip_address: str
     mac_address: str
-    port: int = 8080
+    port: int = 80
     total_ports: int = 8  # Default, can be configured
     ports: Dict[int, PortConfig] = field(default_factory=dict)
 
@@ -81,7 +81,7 @@ class BoardConfig:
             board_name=data["board_name"],
             ip_address=data["ip_address"],
             mac_address=data["mac_address"],
-            port=data.get("port", 8080),
+            port=data.get("port", 80),
             total_ports=data.get("total_ports", 8),
             ports=ports,
         )

@@ -185,6 +185,39 @@ type: custom:vda-ir-control-card
    - **Device Type**: e.g., "Samsung TV", "Comcast Box"
 4. Add commands from learned codes or enter codes manually
 
+### Built-in IR Profiles
+
+The integration includes pre-loaded IR code profiles for popular devices, so you can get started without learning codes:
+
+**TVs:**
+| Brand | Protocol | Commands |
+|-------|----------|----------|
+| Samsung | SAMSUNG | Power, Volume, Channel, Navigation, Numbers, HDMI |
+| LG | NEC | Power, Volume, Channel, Navigation, Numbers, HDMI 1-4 |
+| Sony | SONY | Power, Volume, Channel, Navigation, Numbers |
+| Vizio | NEC | Power, Volume, Channel, Navigation, Numbers, HDMI |
+| TCL/Roku | NEC | Power, Volume, Navigation, Playback |
+| Hisense | NEC | Power, Volume, Channel, Navigation, Numbers |
+
+**Streaming Devices:**
+| Device | Protocol | Commands |
+|--------|----------|----------|
+| Apple TV | NEC | Menu, Navigation, Select, Play/Pause |
+| Amazon Fire TV | NEC | Power, Home, Navigation, Playback |
+| Roku | NEC | Power, Home, Navigation, Playback |
+
+**Soundbars:**
+| Brand | Protocol | Commands |
+|-------|----------|----------|
+| Samsung | SAMSUNG | Power, Volume, Mute, Source |
+| Vizio | NEC | Power, Volume, Mute, Input, Bluetooth |
+| Sony | SONY | Power, Volume, Mute, Input |
+
+**Cable/Satellite:**
+| Provider | Protocol | Commands |
+|----------|----------|----------|
+| DirecTV | DIRECTV | Power, Guide, Menu, Navigation, Playback, Numbers |
+
 ### Controlling Devices
 
 Once configured, devices appear as entities in Home Assistant:
@@ -255,6 +288,22 @@ curl -X POST http://192.168.1.100/send_ir \
   -H "Content-Type: application/json" \
   -d '{"output": 4, "code": "20DF10EF", "protocol": "nec"}'
 ```
+
+### Home Assistant API Endpoints
+
+The integration also exposes REST API endpoints within Home Assistant:
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/vda_ir_control/boards` | GET | List all configured boards |
+| `/api/vda_ir_control/profiles` | GET | List user-created profiles |
+| `/api/vda_ir_control/builtin_profiles` | GET | List pre-loaded IR profiles |
+| `/api/vda_ir_control/builtin_profiles/{id}` | GET | Get a specific built-in profile |
+| `/api/vda_ir_control/devices` | GET | List all configured devices |
+
+**Query parameters for `/api/vda_ir_control/builtin_profiles`:**
+- `device_type`: Filter by type (tv, cable_box, soundbar, streaming)
+- `manufacturer`: Filter by brand name
 
 ## Troubleshooting
 

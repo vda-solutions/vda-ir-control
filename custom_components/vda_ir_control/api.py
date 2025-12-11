@@ -16,6 +16,14 @@ from .device_types import (
     ESP32_POE_ISO_RESERVED,
     get_available_ir_pins,
 )
+from .ir_profiles import (
+    get_all_profiles,
+    get_profiles_by_type,
+    get_profiles_by_manufacturer,
+    get_profile_by_id,
+    get_available_manufacturers,
+    get_available_device_types,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -319,6 +327,55 @@ class VDAIRPortAssignmentsView(HomeAssistantView):
         })
 
 
+class VDAIRBuiltinProfilesView(HomeAssistantView):
+    """API endpoint for built-in IR profiles."""
+
+    url = "/api/vda_ir_control/builtin_profiles"
+    name = "api:vda_ir_control:builtin_profiles"
+    requires_auth = True
+
+    async def get(self, request):
+        """Get all built-in IR profiles.
+
+        Optional query parameters:
+        - device_type: Filter by device type (tv, cable_box, soundbar, streaming)
+        - manufacturer: Filter by manufacturer name
+        """
+        device_type = request.query.get("device_type")
+        manufacturer = request.query.get("manufacturer")
+
+        if device_type:
+            profiles = get_profiles_by_type(device_type)
+        elif manufacturer:
+            profiles = get_profiles_by_manufacturer(manufacturer)
+        else:
+            profiles = get_all_profiles()
+
+        return self.json({
+            "profiles": profiles,
+            "total": len(profiles),
+            "available_device_types": get_available_device_types(),
+            "available_manufacturers": get_available_manufacturers(),
+        })
+
+
+class VDAIRBuiltinProfileView(HomeAssistantView):
+    """API endpoint for a single built-in IR profile."""
+
+    url = "/api/vda_ir_control/builtin_profiles/{profile_id}"
+    name = "api:vda_ir_control:builtin_profile"
+    requires_auth = True
+
+    async def get(self, request, profile_id):
+        """Get a specific built-in IR profile by ID."""
+        profile = get_profile_by_id(profile_id)
+
+        if profile is None:
+            return self.json({"error": "Profile not found"}, status_code=404)
+
+        return self.json(profile)
+
+
 async def async_setup_api(hass: HomeAssistant) -> None:
     """Set up the REST API."""
     hass.http.register_view(VDAIRBoardsView())
@@ -330,4 +387,6 @@ async def async_setup_api(hass: HomeAssistant) -> None:
     hass.http.register_view(VDAIRLearningStatusView())
     hass.http.register_view(VDAIRGPIOPinsView())
     hass.http.register_view(VDAIRPortAssignmentsView())
+    hass.http.register_view(VDAIRBuiltinProfilesView())
+    hass.http.register_view(VDAIRBuiltinProfileView())
     _LOGGER.info("VDA IR Control REST API registered")

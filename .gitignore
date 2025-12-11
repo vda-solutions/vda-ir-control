@@ -46,3 +46,6 @@ Thumbs.db
 
 # Mosquitto data
 mosquitto/data/
+
+# PlatformIO build artifacts
+firmware/.pio/

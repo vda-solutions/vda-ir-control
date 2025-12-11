@@ -1,0 +1,8 @@
+{
+  "name": "VDA IR Control",
+  "render_readme": true,
+  "domains": ["switch"],
+  "country": ["US"],
+  "homeassistant": "2023.1.0",
+  "iot_class": "local_polling"
+}

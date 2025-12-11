@@ -1,109 +1,131 @@
 # VDA IR Control
 
-A Home Assistant integration for controlling multiple IR devices (cable boxes, TVs, etc.) using Olimex ESP32-POE-ISO boards. Designed for commercial venues like bars and restaurants that need to control many devices from a central location.
+[![GitHub Release](https://img.shields.io/github/v/release/vda-solutions/vda-ir-control)](https://github.com/vda-solutions/vda-ir-control/releases)
+[![License](https://img.shields.io/github/license/vda-solutions/vda-ir-control)](LICENSE)
+
+A Home Assistant integration for controlling multiple IR devices (cable boxes, TVs, etc.) using ESP32 boards. Designed for commercial venues like bars and restaurants that need to control many devices from a central location.
 
 ## Features
 
-- **Multi-board support**: Manage multiple ESP32-POE-ISO boards, each with up to 16 configurable IR ports
-- **PoE powered**: Power over Ethernet eliminates the need for separate power supplies
+- **Multi-board support**: Manage multiple ESP32 boards, each with configurable IR ports
+- **Dual connectivity**: Supports both Ethernet (PoE) and WiFi boards
 - **IR Learning**: Learn IR codes directly from original remotes
 - **Device Profiles**: Create and manage device profiles with learned IR commands
 - **Custom Lovelace Card**: Beautiful UI for board management and device control
 - **HACS Compatible**: Easy installation through HACS (Home Assistant Community Store)
 
-## Hardware Requirements
+## Supported Hardware
 
-- **[Olimex ESP32-POE-ISO](https://www.olimex.com/Products/IoT/ESP32/ESP32-POE-ISO/open-source-hardware)** board(s)
-- **IR LED(s)** connected to GPIO output pins
-- **IR Receiver** (e.g., TSOP38238) connected to GPIO input pins for learning
-- **PoE Switch** or PoE injector
-- **Ethernet cables**
+| Board | Connection | IR Outputs | IR Inputs | Power |
+|-------|------------|------------|-----------|-------|
+| [Olimex ESP32-POE-ISO](https://www.olimex.com/Products/IoT/ESP32/ESP32-POE-ISO/open-source-hardware) | Ethernet | 12 GPIOs | 4 GPIOs | PoE or USB |
+| ESP32 DevKit | WiFi | 19 GPIOs | 4 GPIOs | USB |
 
-### Available GPIO Pins
+### Additional Hardware Needed
 
-| GPIO | Type | Notes |
-|------|------|-------|
-| 0 | Output | Boot mode (use with caution) |
-| 1 | Output | TX0 - Serial output |
-| 2 | Output | On-board LED |
-| 3 | Output | RX0 - Serial input |
-| 4 | Output | General purpose |
-| 5 | Output | General purpose |
-| 13 | Output | General purpose |
-| 14 | Output | General purpose |
-| 15 | Output | General purpose |
-| 16 | Output | General purpose |
-| 32 | Output | General purpose |
-| 33 | Output | General purpose |
-| 34 | Input Only | ADC1_CH6 - Best for IR receiver |
-| 35 | Input Only | ADC1_CH7 |
-| 36 | Input Only | SENSOR_VP |
-| 39 | Input Only | SENSOR_VN |
+- **IR LED(s)** - Connected to GPIO output pins for transmitting
+- **IR Receiver** (e.g., TSOP38238) - Connected to GPIO input pins for learning
+- **For Ethernet boards**: PoE Switch or PoE injector + Ethernet cables
+- **For WiFi boards**: 2.4GHz WiFi network
 
-**Note**: GPIO 17, 18, 19, 21, 22, 23, 25, 26, 27 are reserved for Ethernet PHY.
+## Quick Start
 
-## Installation
+### 1. Download & Flash Firmware
 
-### 1. Flash the Firmware
+Download the pre-built firmware for your board from [Releases](https://github.com/vda-solutions/vda-ir-control/releases):
 
-See [FIRMWARE_GUIDE.md](FIRMWARE_GUIDE.md) for detailed flashing instructions.
+| Board | Firmware File | Size |
+|-------|---------------|------|
+| Olimex ESP32-POE-ISO | [`firmware-esp32-poe-iso.bin`](https://github.com/vda-solutions/vda-ir-control/releases/latest/download/firmware-esp32-poe-iso.bin) | ~950 KB |
+| ESP32 DevKit (WiFi) | [`firmware-esp32-devkit-wifi.bin`](https://github.com/vda-solutions/vda-ir-control/releases/latest/download/firmware-esp32-devkit-wifi.bin) | ~910 KB |
 
-**Quick start with PlatformIO:**
+Flash using [esptool](https://github.com/espressif/esptool):
 ```bash
-cd firmware
-pio run -t upload
+pip install esptool
+esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 921600 \
+  write_flash -z 0x1000 firmware-esp32-poe-iso.bin
 ```
 
-Or download the pre-built firmware from [Releases](https://github.com/vda-solutions/vda-ir-control/releases).
+Or use the browser-based [ESP Web Tools](https://web.esphome.io/) flasher.
 
-### 2. Install the Home Assistant Integration
+See [FIRMWARE_GUIDE.md](FIRMWARE_GUIDE.md) for detailed instructions.
+
+### 2. Connect Your Board
+
+**Ethernet (ESP32-POE-ISO):**
+- Connect Ethernet cable to PoE switch
+- Board gets IP via DHCP automatically
+- Find IP in router or via mDNS: `vda-ir-XXXXXX.local`
+
+**WiFi (ESP32 DevKit):**
+- Board starts AP mode: `VDA-IR-XXXXXX` (password: `vda-ir-setup`)
+- Connect and configure WiFi at `http://192.168.4.1:8080`
+- Board reboots and joins your network
+
+### 3. Install Home Assistant Integration
 
 #### Via HACS (Recommended)
 
 1. Open HACS in Home Assistant
-2. Click the three dots menu (⋮) in the top right
-3. Select "Custom repositories"
-4. Add repository URL: `https://github.com/vda-solutions/vda-ir-control`
-5. Select category: **Integration**
-6. Click "Add"
-7. Find "VDA IR Control" in the integrations list and click "Download"
-8. Restart Home Assistant
+2. Click ⋮ → **Custom repositories**
+3. Add: `https://github.com/vda-solutions/vda-ir-control`
+4. Category: **Integration**
+5. Click "Add", then find and download "VDA IR Control"
+6. Restart Home Assistant
 
 #### Manual Installation
 
-1. Copy the `custom_components/vda_ir_control` folder to your Home Assistant `config/custom_components/` directory
-2. Restart Home Assistant
+Copy `custom_components/vda_ir_control` to your HA `config/custom_components/` directory.
 
-### 3. Install the Lovelace Card
+### 4. Install Lovelace Card
 
 #### Via HACS
 
-1. Open HACS in Home Assistant
-2. Go to "Frontend" section
-3. Click the three dots menu (⋮) in the top right
-4. Select "Custom repositories"
-5. Add repository URL: `https://github.com/vda-solutions/vda-ir-control`
-6. Select category: **Lovelace**
-7. Click "Add"
-8. Find "VDA IR Control Card" and click "Download"
-9. Refresh your browser (Ctrl+Shift+R / Cmd+Shift+R)
+1. Open HACS → **Frontend**
+2. Click ⋮ → **Custom repositories**
+3. Add: `https://github.com/vda-solutions/vda-ir-control`
+4. Category: **Lovelace**
+5. Download "VDA IR Control Card"
+6. Hard refresh browser (Ctrl+Shift+R)
 
 #### Manual Installation
 
-1. Copy `dist/vda-ir-control-card.js` to your `config/www/` directory
-2. Add to your Lovelace resources:
+1. Copy `dist/vda-ir-control-card.js` to `config/www/`
+2. Add resource in Lovelace:
    ```yaml
    resources:
      - url: /local/vda-ir-control-card.js
        type: module
    ```
 
-### 4. Configure the Integration
+### 5. Configure Integration
 
 1. Go to **Settings** → **Devices & Services**
 2. Click **+ Add Integration**
 3. Search for "VDA IR Control"
 4. Follow the setup wizard
+
+## Available GPIO Pins
+
+### ESP32-POE-ISO (Ethernet)
+
+| GPIO | Type | Notes |
+|------|------|-------|
+| 0, 1, 2, 3, 4, 5 | Output | General purpose (0,1,2,3 have boot considerations) |
+| 13, 14, 15, 16 | Output | General purpose |
+| 32, 33 | Output | General purpose |
+| 34, 35, 36, 39 | **Input Only** | Best for IR receiver |
+
+> **Note**: GPIO 17, 18, 19, 21, 22, 23, 25, 26, 27 are reserved for Ethernet PHY.
+
+### ESP32 DevKit (WiFi)
+
+| GPIO | Type | Notes |
+|------|------|-------|
+| 2, 4, 5, 12, 13, 14, 15 | Output | General purpose |
+| 16, 17, 18, 19, 21, 22, 23 | Output | General purpose |
+| 25, 26, 27, 32, 33 | Output | General purpose |
+| 34, 35, 36, 39 | **Input Only** | Best for IR receiver |
 
 ## Usage
 
@@ -118,55 +140,81 @@ type: custom:vda-ir-control-card
 ### Board Discovery and Adoption
 
 1. Open the VDA IR Control card
-2. Click "Discover Boards" to find ESP32 boards on your network
-3. Click "Adopt" next to each discovered board
-4. Assign a friendly name (e.g., "Living Room IR Controller")
+2. Click **Discover Boards** to find ESP32 boards on your network
+3. Click **Adopt** next to each discovered board
+4. Assign a friendly name (e.g., "Bar Area Controller")
 
 ### Configuring IR Ports
 
 1. Select a board from the dropdown
-2. Go to the "Ports" tab
-3. For each GPIO pin you want to use:
+2. Go to the **Ports** tab
+3. For each GPIO pin:
    - Set **Mode**: `IR Output` for transmitting, `IR Input` for receiving/learning
-   - Set **Name**: A descriptive name (e.g., "TV Output", "IR Receiver")
-4. Click Save
+   - Set **Name**: A descriptive name (e.g., "TV1 Output", "IR Receiver")
+4. Click **Save**
 
 ### Learning IR Codes
 
-1. Go to the "Learn Commands" tab
+1. Go to the **Learn Commands** tab
 2. Select the board with an IR input configured
-3. Select the IR input port
-4. Click "Start Learning"
+3. Select the IR input port from the dropdown
+4. Click **Start Learning**
 5. Point your original remote at the IR receiver and press a button
 6. The learned code will appear - save it to a device profile
 
 ### Creating Device Profiles
 
-1. Go to the "Devices" tab
-2. Click "Create Device"
+1. Go to the **Devices** tab
+2. Click **Create Device**
 3. Enter device details:
-   - **Name**: e.g., "Living Room TV"
+   - **Name**: e.g., "Bar TV 1"
    - **Board**: Select the controlling board
-   - **Output Port**: Select the IR output GPIO
+   - **Output Port**: Select the IR output GPIO from dropdown
    - **Device Type**: e.g., "Samsung TV", "Comcast Box"
 4. Add commands from learned codes or enter codes manually
 
 ### Controlling Devices
 
 Once configured, devices appear as entities in Home Assistant:
-- `switch.vda_ir_living_room_tv_power`
-- `button.vda_ir_living_room_tv_volume_up`
+- `switch.vda_ir_bar_tv_1_power`
+- `button.vda_ir_bar_tv_1_volume_up`
 - etc.
 
 Use these in automations, scripts, or dashboards.
 
-## API Reference
+## Hardware Wiring
+
+### IR LED Output
+
+Basic wiring (short range):
+```
+GPIO Pin ──── 100Ω Resistor ──── IR LED (+) ──── GND
+```
+
+With transistor driver (longer range):
+```
+GPIO Pin ──── 1kΩ ──┬── NPN Base
+                    │
+                    └── NPN Emitter ──── GND
+
+5V ──── 10Ω ──── IR LED (+) ──── IR LED (-) ──── NPN Collector
+```
+
+### IR Receiver
+
+```
+3.3V ──── IR Receiver VCC
+GND  ──── IR Receiver GND
+GPIO34 ── IR Receiver OUT (or GPIO 35, 36, 39)
+```
+
+## REST API Reference
 
 The ESP32 firmware exposes a REST API on port 8080:
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/info` | GET | Board information |
+| `/info` | GET | Board information (ID, MAC, IP, firmware version) |
 | `/status` | GET | Board status and uptime |
 | `/ports` | GET | List all GPIO ports and their configuration |
 | `/ports/configure` | POST | Configure a port's mode and name |
@@ -176,28 +224,74 @@ The ESP32 firmware exposes a REST API on port 8080:
 | `/learning/start` | POST | Start IR learning mode |
 | `/learning/stop` | POST | Stop IR learning mode |
 | `/learning/status` | GET | Get learning status and received codes |
+| `/wifi/scan` | GET | Scan WiFi networks (WiFi boards only) |
+| `/wifi/config` | POST | Configure WiFi credentials (WiFi boards only) |
+
+### Example API Calls
+
+```bash
+# Get board info
+curl http://192.168.1.100:8080/info
+
+# Configure a port as IR output
+curl -X POST http://192.168.1.100:8080/ports/configure \
+  -H "Content-Type: application/json" \
+  -d '{"port": 4, "mode": "ir_output", "name": "TV Output"}'
+
+# Send IR code
+curl -X POST http://192.168.1.100:8080/send_ir \
+  -H "Content-Type: application/json" \
+  -d '{"output": 4, "code": "20DF10EF", "protocol": "nec"}'
+```
 
 ## Troubleshooting
 
 ### Board not discovered
 
-1. Ensure the ESP32 is connected via Ethernet and has an IP address
-2. Check that the board is on the same network/VLAN as Home Assistant
-3. Verify the firmware is running (check serial output or try accessing `http://<board-ip>:8080/info`)
+1. Ensure the ESP32 has an IP address (check router DHCP or serial output)
+2. Verify board is on the same network/VLAN as Home Assistant
+3. Try accessing `http://<board-ip>:8080/info` directly
+4. For WiFi boards, ensure they've connected to your network (not still in AP mode)
 
 ### IR codes not working
 
-1. Verify the IR LED is connected to the correct GPIO pin
-2. Check the LED is oriented correctly (anode to GPIO, cathode to ground through resistor)
+1. Verify IR LED is connected to the correct GPIO pin
+2. Check LED orientation (anode to GPIO via resistor, cathode to ground)
 3. Try different IR protocols (NEC, Sony, RC5, RC6)
-4. Use the test output feature to verify the GPIO is working
+4. Use the test output feature to verify GPIO is working
+5. For long distances, use a transistor driver circuit
 
 ### Learning not receiving codes
 
-1. Verify the IR receiver is connected to an input-only GPIO (34, 35, 36, or 39)
-2. Ensure the receiver is powered (3.3V) and grounded
-3. Point the remote directly at the receiver from close range
+1. Verify IR receiver is connected to an input-only GPIO (34, 35, 36, or 39)
+2. Ensure receiver is powered (3.3V) and grounded
+3. Point remote directly at receiver from close range (< 1 meter)
 4. Check serial output for received signals
+5. Try a different remote - some use uncommon protocols
+
+### WiFi board won't connect
+
+1. Ensure your network is 2.4GHz (ESP32 doesn't support 5GHz)
+2. Check WiFi credentials are correct
+3. Move board closer to router during initial setup
+4. Factory reset: erase flash and re-flash firmware
+
+## Building from Source
+
+```bash
+# Clone repository
+git clone https://github.com/vda-solutions/vda-ir-control.git
+cd vda-ir-control/firmware
+
+# Build for ESP32-POE-ISO (Ethernet)
+pio run -e esp32-poe-iso
+
+# Build for ESP32 DevKit (WiFi)
+pio run -e esp32-devkit
+
+# Upload to connected board
+pio run -e esp32-poe-iso -t upload
+```
 
 ## Contributing
 
@@ -215,4 +309,4 @@ MIT License - see [LICENSE](LICENSE) for details.
 ## Support
 
 - **Issues**: [GitHub Issues](https://github.com/vda-solutions/vda-ir-control/issues)
-- **Documentation**: [Wiki](https://github.com/vda-solutions/vda-ir-control/wiki)
+- **Firmware Guide**: [FIRMWARE_GUIDE.md](FIRMWARE_GUIDE.md)

@@ -74,7 +74,7 @@ class VDAIRBoardCoordinator(DataUpdateCoordinator):
                 "unique_id": f"{self.board_id}_output_{i}",
             }
 
-    async def send_ir_code(self, output: int, code: str) -> bool:
+    async def send_ir_code(self, output: int, code: str, protocol: str = None) -> bool:
         """Send IR code to a specific output."""
         try:
             if self.session is None:
@@ -84,6 +84,8 @@ class VDAIRBoardCoordinator(DataUpdateCoordinator):
                 "output": output,
                 "code": code,
             }
+            if protocol:
+                payload["protocol"] = protocol.lower()
 
             async with self.session.post(
                 f"{self.base_url}/send_ir",

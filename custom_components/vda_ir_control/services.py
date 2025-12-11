@@ -13,6 +13,7 @@ from .coordinator import VDAIRBoardCoordinator, VDAIRDiscoveryCoordinator
 from .device_types import DeviceType, get_commands_for_device_type
 from .models import DeviceProfile, ControlledDevice
 from .storage import get_storage
+from .ir_profiles import get_profile_by_id as get_builtin_profile
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -409,17 +410,28 @@ async def async_setup_services(hass: HomeAssistant) -> None:
     async def handle_create_device(call: ServiceCall) -> Dict[str, Any]:
         """Handle create_device service."""
         storage = get_storage(hass)
+        profile_id = call.data["profile_id"]
 
-        # Verify profile exists
-        profile = await storage.async_get_profile(call.data["profile_id"])
-        if profile is None:
-            raise ServiceValidationError(f"Profile '{call.data['profile_id']}' not found")
+        # Check if it's a built-in profile (prefixed with "builtin:")
+        if profile_id.startswith("builtin:"):
+            builtin_id = profile_id[8:]  # Remove "builtin:" prefix
+            builtin_profile = get_builtin_profile(builtin_id)
+            if builtin_profile is None:
+                raise ServiceValidationError(f"Built-in profile '{builtin_id}' not found")
+            # Use the builtin profile ID as-is
+            device_profile_id = profile_id
+        else:
+            # Verify user profile exists
+            profile = await storage.async_get_profile(profile_id)
+            if profile is None:
+                raise ServiceValidationError(f"Profile '{profile_id}' not found")
+            device_profile_id = profile_id
 
         device = ControlledDevice(
             device_id=call.data["device_id"],
             name=call.data["name"],
             location=call.data.get("location", ""),
-            device_profile_id=call.data["profile_id"],
+            device_profile_id=device_profile_id,
             board_id=call.data["board_id"],
             output_port=call.data["output_port"],
         )
@@ -461,22 +473,44 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         if device is None:
             raise ServiceValidationError(f"Device '{device_id}' not found")
 
-        # Get profile
-        profile = await storage.async_get_profile(device.device_profile_id)
-        if profile is None:
-            raise ServiceValidationError(f"Profile '{device.device_profile_id}' not found")
+        # Check if using a built-in profile
+        profile_id = device.device_profile_id
+        ir_code_data = None
+        protocol = None
 
-        # Get IR code
-        ir_code = profile.get_code(command)
-        if ir_code is None:
-            raise ServiceValidationError(f"Command '{command}' not found in profile")
+        if profile_id.startswith("builtin:"):
+            builtin_id = profile_id[8:]  # Remove "builtin:" prefix
+            builtin_profile = get_builtin_profile(builtin_id)
+            if builtin_profile is None:
+                raise ServiceValidationError(f"Built-in profile '{builtin_id}' not found")
+
+            # Get IR code from built-in profile
+            codes = builtin_profile.get("codes", {})
+            if command not in codes:
+                raise ServiceValidationError(f"Command '{command}' not found in built-in profile")
+
+            ir_code_data = codes[command]
+            protocol = builtin_profile.get("protocol", "NEC")
+        else:
+            # Get user profile
+            profile = await storage.async_get_profile(profile_id)
+            if profile is None:
+                raise ServiceValidationError(f"Profile '{profile_id}' not found")
+
+            # Get IR code
+            ir_code = profile.get_code(command)
+            if ir_code is None:
+                raise ServiceValidationError(f"Command '{command}' not found in profile")
+
+            ir_code_data = ir_code.raw_code
+            protocol = ir_code.protocol
 
         # Get coordinator and send
         coordinator = _get_board_coordinator(device.board_id)
         if coordinator is None:
             raise ServiceValidationError(f"Board '{device.board_id}' not found")
 
-        success = await coordinator.send_ir_code(device.output_port, ir_code.raw_code)
+        success = await coordinator.send_ir_code(device.output_port, ir_code_data, protocol)
 
         if not success:
             raise ServiceValidationError(f"Failed to send command to device")

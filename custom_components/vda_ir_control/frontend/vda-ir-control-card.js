@@ -21,6 +21,9 @@ class VDAIRControlCard extends HTMLElement {
     this._portAssignments = {};
     this._learnInputPorts = [];
     this._deviceOutputPorts = [];
+    this._builtinProfiles = [];
+    this._builtinManufacturers = [];
+    this._builtinDeviceTypes = [];
   }
 
   set hass(hass) {
@@ -47,6 +50,7 @@ class VDAIRControlCard extends HTMLElement {
     await Promise.all([
       this._loadBoards(),
       this._loadProfiles(),
+      this._loadBuiltinProfiles(),
       this._loadDevices(),
       this._loadGPIOPins(),
     ]);
@@ -177,6 +181,31 @@ class VDAIRControlCard extends HTMLElement {
     } catch (e) {
       console.error('Failed to load profiles:', e);
       this._profiles = [];
+    }
+  }
+
+  async _loadBuiltinProfiles() {
+    try {
+      const resp = await fetch('/api/vda_ir_control/builtin_profiles', {
+        headers: {
+          'Authorization': `Bearer ${this._hass.auth.data.access_token}`,
+        },
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        this._builtinProfiles = data.profiles || [];
+        this._builtinManufacturers = data.available_manufacturers || [];
+        this._builtinDeviceTypes = data.available_device_types || [];
+      } else {
+        this._builtinProfiles = [];
+        this._builtinManufacturers = [];
+        this._builtinDeviceTypes = [];
+      }
+    } catch (e) {
+      console.error('Failed to load built-in profiles:', e);
+      this._builtinProfiles = [];
+      this._builtinManufacturers = [];
+      this._builtinDeviceTypes = [];
     }
   }
 
@@ -727,19 +756,56 @@ class VDAIRControlCard extends HTMLElement {
 
   _renderProfilesTab() {
     return `
+      <!-- Built-in Profiles Section -->
       <div class="section">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-          <div class="section-title" style="margin-bottom: 0;">Device Profiles</div>
+          <div class="section-title" style="margin-bottom: 0;">Built-in Profiles</div>
+          <span class="badge badge-success">${this._builtinProfiles.length} available</span>
+        </div>
+
+        ${this._builtinProfiles.length === 0 ? `
+          <p style="color: var(--secondary-text-color); font-size: 13px;">Loading built-in profiles...</p>
+        ` : `
+          <div style="margin-bottom: 12px;">
+            <select id="builtin-filter" data-action="filter-builtin" style="padding: 8px 12px; border-radius: 6px; border: 1px solid var(--divider-color); background: var(--input-fill-color, var(--secondary-background-color)); color: var(--primary-text-color);">
+              <option value="">All Types</option>
+              ${this._builtinDeviceTypes.map(t => `<option value="${t}">${this._formatDeviceType(t)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="builtin-profiles-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px;">
+            ${this._builtinProfiles.map(profile => `
+              <div class="list-item" style="cursor: default; flex-direction: column; align-items: flex-start; padding: 12px;">
+                <div class="list-item-title" style="margin-bottom: 4px;">
+                  ${profile.name}
+                </div>
+                <div class="list-item-subtitle" style="margin-bottom: 8px;">
+                  ${profile.manufacturer} • ${this._formatDeviceType(profile.device_type)}
+                </div>
+                <div style="font-size: 11px; color: var(--secondary-text-color); margin-bottom: 8px;">
+                  ${Object.keys(profile.codes || {}).length} commands • ${profile.protocol} protocol
+                </div>
+                <button class="btn btn-primary btn-small" style="width: 100%;" data-action="use-builtin-profile" data-profile-id="${profile.profile_id}">
+                  Use This Profile
+                </button>
+              </div>
+            `).join('')}
+          </div>
+        `}
+      </div>
+
+      <!-- User Profiles Section -->
+      <div class="section" style="margin-top: 24px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+          <div class="section-title" style="margin-bottom: 0;">My Custom Profiles</div>
           <button class="btn btn-primary btn-small" data-action="create-profile">
             + New Profile
           </button>
         </div>
 
         ${this._profiles.length === 0 ? `
-          <div class="empty-state">
-            <div class="empty-state-icon">📋</div>
-            <p>No profiles yet</p>
-            <p style="font-size: 12px;">Create a profile to start learning IR codes</p>
+          <div class="empty-state" style="padding: 20px;">
+            <p style="color: var(--secondary-text-color);">No custom profiles yet</p>
+            <p style="font-size: 12px; color: var(--secondary-text-color);">Create a profile to learn IR codes from your remotes</p>
           </div>
         ` : this._profiles.map(profile => `
           <div class="list-item ${this._selectedProfile === profile.profile_id ? 'selected' : ''}"
@@ -766,6 +832,16 @@ class VDAIRControlCard extends HTMLElement {
         `).join('')}
       </div>
     `;
+  }
+
+  _formatDeviceType(type) {
+    const typeMap = {
+      'tv': 'TV',
+      'cable_box': 'Cable Box',
+      'soundbar': 'Soundbar',
+      'streaming': 'Streaming Device',
+    };
+    return typeMap[type] || type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
   }
 
   _renderDevicesTab() {
@@ -901,9 +977,21 @@ class VDAIRControlCard extends HTMLElement {
           <div class="form-group">
             <label>Profile</label>
             <select id="device-profile">
-              ${this._profiles.length > 0 ? this._profiles.map(p => `
-                <option value="${p.profile_id}">${p.name}</option>
-              `).join('') : '<option value="">No profiles - create one first</option>'}
+              ${this._builtinProfiles.length > 0 ? `
+                <optgroup label="Built-in Profiles">
+                  ${this._builtinProfiles.map(p => `
+                    <option value="builtin:${p.profile_id}" ${this._modal?.preselectedProfile === `builtin:${p.profile_id}` ? 'selected' : ''}>${p.name} (${p.manufacturer})</option>
+                  `).join('')}
+                </optgroup>
+              ` : ''}
+              ${this._profiles.length > 0 ? `
+                <optgroup label="My Custom Profiles">
+                  ${this._profiles.map(p => `
+                    <option value="${p.profile_id}" ${this._modal?.preselectedProfile === p.profile_id ? 'selected' : ''}>${p.name}</option>
+                  `).join('')}
+                </optgroup>
+              ` : ''}
+              ${this._profiles.length === 0 && this._builtinProfiles.length === 0 ? '<option value="">No profiles available</option>' : ''}
             </select>
           </div>
 
@@ -1243,6 +1331,40 @@ class VDAIRControlCard extends HTMLElement {
         this._learningState = null;
         this._render();
         break;
+
+      case 'use-builtin-profile':
+        // Open device creation modal with this profile pre-selected
+        this._modal = { type: 'create-device', preselectedProfile: `builtin:${e.target.dataset.profileId}` };
+        this._deviceOutputPorts = [];
+        if (this._boards.length > 0) {
+          await this._loadDeviceOutputPorts(this._boards[0].board_id);
+        }
+        this._render();
+        break;
+
+      case 'filter-builtin':
+        await this._filterBuiltinProfiles(e.target.value);
+        break;
+    }
+  }
+
+  async _filterBuiltinProfiles(deviceType) {
+    try {
+      const url = deviceType
+        ? `/api/vda_ir_control/builtin_profiles?device_type=${deviceType}`
+        : '/api/vda_ir_control/builtin_profiles';
+      const resp = await fetch(url, {
+        headers: {
+          'Authorization': `Bearer ${this._hass.auth.data.access_token}`,
+        },
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        this._builtinProfiles = data.profiles || [];
+      }
+      this._render();
+    } catch (e) {
+      console.error('Failed to filter profiles:', e);
     }
   }
 

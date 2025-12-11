@@ -1,9 +1,10 @@
 /*
  * VDA IR Control Firmware
- * For Olimex ESP32-POE-ISO boards
+ * Supports:
+ * - Olimex ESP32-POE-ISO (Ethernet/PoE) - compile with USE_ETHERNET
+ * - ESP32 DevKit (WiFi) - compile with USE_WIFI
  *
  * Features:
- * - Ethernet with PoE support
  * - HTTP REST API for Home Assistant integration
  * - IR transmission on configurable GPIO pins
  * - IR learning/receiving on input-only GPIO pins
@@ -12,7 +13,6 @@
  */
 
 #include <Arduino.h>
-#include <ETH.h>
 #include <WebServer.h>
 #include <ESPmDNS.h>
 #include <ArduinoJson.h>
@@ -22,20 +22,32 @@
 #include <IRrecv.h>
 #include <IRutils.h>
 
-// ============ ESP32-POE-ISO Ethernet Configuration ============
-#define ETH_PHY_TYPE        ETH_PHY_LAN8720
-#define ETH_PHY_ADDR        0
-#define ETH_PHY_MDC         23
-#define ETH_PHY_MDIO        18
-#define ETH_PHY_POWER       12
-#define ETH_CLK_MODE        ETH_CLOCK_GPIO17_OUT
+#ifdef USE_ETHERNET
+  #include <ETH.h>
+#else
+  #include <WiFi.h>
+#endif
+
+// ============ WiFi Credentials (for DevKit) ============
+#ifdef USE_WIFI
+  // Default credentials - can be changed via serial or web interface
+  String wifiSSID = "";
+  String wifiPassword = "";
+  bool wifiConfigured = false;
+#endif
 
 // ============ Available GPIO Pins for IR ============
-// Output-capable pins (directly from Olimex pinout)
-const int OUTPUT_CAPABLE_PINS[] = {0, 1, 2, 3, 4, 5, 13, 14, 15, 16, 32, 33};
-const int OUTPUT_CAPABLE_COUNT = 12;
+#ifdef USE_ETHERNET
+  // Olimex ESP32-POE-ISO pins (Ethernet reserves some GPIOs)
+  const int OUTPUT_CAPABLE_PINS[] = {0, 1, 2, 3, 4, 5, 13, 14, 15, 16, 32, 33};
+  const int OUTPUT_CAPABLE_COUNT = 12;
+#else
+  // ESP32 DevKit - more GPIOs available (no Ethernet)
+  const int OUTPUT_CAPABLE_PINS[] = {2, 4, 5, 12, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33};
+  const int OUTPUT_CAPABLE_COUNT = 19;
+#endif
 
-// Input-only pins (for IR receiver)
+// Input-only pins (for IR receiver) - same on both boards
 const int INPUT_ONLY_PINS[] = {34, 35, 36, 39};
 const int INPUT_ONLY_COUNT = 4;
 
@@ -46,7 +58,12 @@ struct PortConfig {
   String name;
 };
 
-#define MAX_PORTS 16
+#ifdef USE_ETHERNET
+  #define MAX_PORTS 16
+#else
+  #define MAX_PORTS 23
+#endif
+
 PortConfig ports[MAX_PORTS];
 int portCount = 0;
 
@@ -64,17 +81,26 @@ bool adopted = false;
 // ============ Global Objects ============
 WebServer server(8080);
 Preferences preferences;
-bool ethConnected = false;
+bool networkConnected = false;
 
 // ============ Function Declarations ============
-void initEthernet();
-void onEthEvent(WiFiEvent_t event);
+void initNetwork();
 void setupWebServer();
 void loadConfig();
 void saveConfig();
 void initPorts();
 void initIRSender(int portIndex);
 void initIRReceiver(int gpio);
+String getLocalIP();
+String getMacAddress();
+
+#ifdef USE_ETHERNET
+  void onEthEvent(WiFiEvent_t event);
+#else
+  void onWiFiEvent(WiFiEvent_t event);
+  void handleWiFiConfig();
+  void startAPMode();
+#endif
 
 // ============ HTTP Handlers ============
 void handleInfo();
@@ -96,24 +122,38 @@ void setup() {
 
   Serial.println("\n\n========================================");
   Serial.println("   VDA IR Control Firmware v1.0.0");
-  Serial.println("   For Olimex ESP32-POE-ISO");
+#ifdef USE_ETHERNET
+  Serial.println("   Mode: Ethernet (ESP32-POE-ISO)");
+#else
+  Serial.println("   Mode: WiFi (ESP32 DevKit)");
+#endif
   Serial.println("========================================\n");
 
   // Load saved configuration
   loadConfig();
 
-  // Initialize Ethernet
-  initEthernet();
+  // Initialize network
+  initNetwork();
 
-  // Wait for Ethernet connection
-  Serial.println("Waiting for Ethernet...");
+  // Wait for network connection
+  Serial.println("Waiting for network...");
   int timeout = 0;
-  while (!ethConnected && timeout < 100) {
+  int maxTimeout = 100;  // 10 seconds for Ethernet, will be longer for WiFi AP mode
+
+#ifdef USE_WIFI
+  if (!wifiConfigured) {
+    Serial.println("No WiFi configured - starting AP mode...");
+    startAPMode();
+    maxTimeout = 50;  // Shorter wait for AP mode
+  }
+#endif
+
+  while (!networkConnected && timeout < maxTimeout) {
     delay(100);
     timeout++;
   }
 
-  if (ethConnected) {
+  if (networkConnected) {
     // Setup mDNS
     String mdnsName = boardId.length() > 0 ? boardId : "vda-ir-" + String((uint32_t)ESP.getEfuseMac(), HEX);
     if (MDNS.begin(mdnsName.c_str())) {
@@ -129,11 +169,16 @@ void setup() {
     initPorts();
 
     Serial.println("\n=== Ready! ===");
-    Serial.printf("IP Address: %s\n", ETH.localIP().toString().c_str());
+    Serial.printf("IP Address: %s\n", getLocalIP().c_str());
     Serial.printf("Board ID: %s\n", boardId.c_str());
-    Serial.printf("HTTP Server: http://%s:8080\n", ETH.localIP().toString().c_str());
+    Serial.printf("HTTP Server: http://%s:8080\n", getLocalIP().c_str());
   } else {
-    Serial.println("ERROR: Ethernet connection failed!");
+    Serial.println("ERROR: Network connection failed!");
+#ifdef USE_WIFI
+    Serial.println("Starting AP mode for configuration...");
+    startAPMode();
+    setupWebServer();
+#endif
   }
 }
 
@@ -152,8 +197,10 @@ void loop() {
   delay(1);
 }
 
-// ============ Ethernet ============
-void initEthernet() {
+// ============ Network Initialization ============
+#ifdef USE_ETHERNET
+
+void initNetwork() {
   WiFi.onEvent(onEthEvent);
   ETH.begin(ETH_PHY_ADDR, ETH_PHY_POWER, ETH_PHY_MDC, ETH_PHY_MDIO, ETH_PHY_TYPE, ETH_CLK_MODE);
 }
@@ -170,20 +217,138 @@ void onEthEvent(WiFiEvent_t event) {
     case ARDUINO_EVENT_ETH_GOT_IP:
       Serial.printf("ETH: Got IP - %s\n", ETH.localIP().toString().c_str());
       Serial.printf("ETH: MAC - %s\n", ETH.macAddress().c_str());
-      ethConnected = true;
+      networkConnected = true;
       break;
     case ARDUINO_EVENT_ETH_DISCONNECTED:
       Serial.println("ETH: Disconnected");
-      ethConnected = false;
+      networkConnected = false;
       break;
     case ARDUINO_EVENT_ETH_STOP:
       Serial.println("ETH: Stopped");
-      ethConnected = false;
+      networkConnected = false;
       break;
     default:
       break;
   }
 }
+
+String getLocalIP() {
+  return ETH.localIP().toString();
+}
+
+String getMacAddress() {
+  return ETH.macAddress();
+}
+
+#else  // USE_WIFI
+
+void initNetwork() {
+  WiFi.onEvent(onWiFiEvent);
+
+  if (wifiConfigured && wifiSSID.length() > 0) {
+    Serial.printf("Connecting to WiFi: %s\n", wifiSSID.c_str());
+    WiFi.mode(WIFI_STA);
+    WiFi.setHostname(boardId.length() > 0 ? boardId.c_str() : "vda-ir-controller");
+    WiFi.begin(wifiSSID.c_str(), wifiPassword.c_str());
+  }
+}
+
+void onWiFiEvent(WiFiEvent_t event) {
+  switch (event) {
+    case ARDUINO_EVENT_WIFI_STA_START:
+      Serial.println("WiFi: Started");
+      break;
+    case ARDUINO_EVENT_WIFI_STA_CONNECTED:
+      Serial.println("WiFi: Connected");
+      break;
+    case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+      Serial.printf("WiFi: Got IP - %s\n", WiFi.localIP().toString().c_str());
+      Serial.printf("WiFi: MAC - %s\n", WiFi.macAddress().c_str());
+      networkConnected = true;
+      break;
+    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+      Serial.println("WiFi: Disconnected");
+      networkConnected = false;
+      break;
+    case ARDUINO_EVENT_WIFI_AP_START:
+      Serial.println("WiFi AP: Started");
+      networkConnected = true;
+      break;
+    case ARDUINO_EVENT_WIFI_AP_STACONNECTED:
+      Serial.println("WiFi AP: Client connected");
+      break;
+    default:
+      break;
+  }
+}
+
+void startAPMode() {
+  String apName = "VDA-IR-" + String((uint32_t)ESP.getEfuseMac(), HEX);
+  Serial.printf("Starting AP: %s\n", apName.c_str());
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP(apName.c_str(), "vda-ir-setup");
+  Serial.printf("AP IP: %s\n", WiFi.softAPIP().toString().c_str());
+  networkConnected = true;
+}
+
+String getLocalIP() {
+  if (WiFi.getMode() == WIFI_AP) {
+    return WiFi.softAPIP().toString();
+  }
+  return WiFi.localIP().toString();
+}
+
+String getMacAddress() {
+  return WiFi.macAddress();
+}
+
+void handleWiFiConfig() {
+  if (!server.hasArg("plain")) {
+    server.send(400, "application/json", "{\"error\":\"No body\"}");
+    return;
+  }
+
+  StaticJsonDocument<256> doc;
+  DeserializationError error = deserializeJson(doc, server.arg("plain"));
+
+  if (error) {
+    server.send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+    return;
+  }
+
+  String newSSID = doc["ssid"] | "";
+  String newPassword = doc["password"] | "";
+
+  if (newSSID.length() == 0) {
+    server.send(400, "application/json", "{\"error\":\"SSID required\"}");
+    return;
+  }
+
+  wifiSSID = newSSID;
+  wifiPassword = newPassword;
+  wifiConfigured = true;
+
+  // Save to preferences
+  preferences.begin("vda-ir", false);
+  preferences.putString("wifiSSID", wifiSSID);
+  preferences.putString("wifiPass", wifiPassword);
+  preferences.putBool("wifiConf", true);
+  preferences.end();
+
+  StaticJsonDocument<128> response;
+  response["success"] = true;
+  response["message"] = "WiFi configured. Rebooting...";
+
+  String responseStr;
+  serializeJson(response, responseStr);
+  server.send(200, "application/json", responseStr);
+
+  Serial.println("WiFi configured. Rebooting...");
+  delay(1000);
+  ESP.restart();
+}
+
+#endif
 
 // ============ Configuration ============
 void loadConfig() {
@@ -193,6 +358,12 @@ void loadConfig() {
   boardName = preferences.getString("boardName", "VDA IR Controller");
   adopted = preferences.getBool("adopted", false);
   portCount = preferences.getInt("portCount", 0);
+
+#ifdef USE_WIFI
+  wifiSSID = preferences.getString("wifiSSID", "");
+  wifiPassword = preferences.getString("wifiPass", "");
+  wifiConfigured = preferences.getBool("wifiConf", false);
+#endif
 
   // Generate default board ID if not set
   if (boardId.length() == 0) {
@@ -290,6 +461,25 @@ void setupWebServer() {
   server.on("/learning/start", HTTP_POST, handleLearningStart);
   server.on("/learning/stop", HTTP_POST, handleLearningStop);
   server.on("/learning/status", HTTP_GET, handleLearningStatus);
+
+#ifdef USE_WIFI
+  server.on("/wifi/config", HTTP_POST, handleWiFiConfig);
+  server.on("/wifi/scan", HTTP_GET, []() {
+    int n = WiFi.scanNetworks();
+    StaticJsonDocument<1024> doc;
+    JsonArray networks = doc.createNestedArray("networks");
+    for (int i = 0; i < n && i < 20; i++) {
+      JsonObject net = networks.createNestedObject();
+      net["ssid"] = WiFi.SSID(i);
+      net["rssi"] = WiFi.RSSI(i);
+      net["secure"] = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
+    }
+    String response;
+    serializeJson(doc, response);
+    server.send(200, "application/json", response);
+  });
+#endif
+
   server.onNotFound(handleNotFound);
 
   server.enableCORS(true);
@@ -303,11 +493,24 @@ void handleInfo() {
 
   doc["board_id"] = boardId;
   doc["board_name"] = boardName;
-  doc["mac_address"] = ETH.macAddress();
-  doc["ip_address"] = ETH.localIP().toString();
+  doc["mac_address"] = getMacAddress();
+  doc["ip_address"] = getLocalIP();
   doc["firmware_version"] = "1.0.0";
   doc["adopted"] = adopted;
   doc["total_ports"] = portCount;
+
+#ifdef USE_ETHERNET
+  doc["connection_type"] = "ethernet";
+#else
+  doc["connection_type"] = "wifi";
+  doc["wifi_configured"] = wifiConfigured;
+  if (WiFi.getMode() == WIFI_AP) {
+    doc["wifi_mode"] = "ap";
+  } else {
+    doc["wifi_mode"] = "station";
+    doc["wifi_ssid"] = wifiSSID;
+  }
+#endif
 
   int outputCount = 0, inputCount = 0;
   for (int i = 0; i < portCount; i++) {
@@ -329,7 +532,13 @@ void handleStatus() {
   doc["online"] = true;
   doc["uptime_seconds"] = millis() / 1000;
   doc["free_heap"] = ESP.getFreeHeap();
-  doc["eth_connected"] = ethConnected;
+  doc["network_connected"] = networkConnected;
+
+#ifdef USE_WIFI
+  if (WiFi.getMode() == WIFI_STA) {
+    doc["wifi_rssi"] = WiFi.RSSI();
+  }
+#endif
 
   String response;
   serializeJson(doc, response);

@@ -299,7 +299,7 @@ void setupWebServer() {
 
 // ============ HTTP Handlers ============
 void handleInfo() {
-  JsonDocument doc;
+  StaticJsonDocument<512> doc;
 
   doc["board_id"] = boardId;
   doc["board_name"] = boardName;
@@ -323,7 +323,7 @@ void handleInfo() {
 }
 
 void handleStatus() {
-  JsonDocument doc;
+  StaticJsonDocument<256> doc;
 
   doc["board_id"] = boardId;
   doc["online"] = true;
@@ -337,13 +337,13 @@ void handleStatus() {
 }
 
 void handlePorts() {
-  JsonDocument doc;
+  StaticJsonDocument<2048> doc;
 
   doc["total_ports"] = portCount;
-  JsonArray portsArray = doc["ports"].to<JsonArray>();
+  JsonArray portsArray = doc.createNestedArray("ports");
 
   for (int i = 0; i < portCount; i++) {
-    JsonObject port = portsArray.add<JsonObject>();
+    JsonObject port = portsArray.createNestedObject();
     port["port"] = ports[i].gpio;
     port["gpio"] = ports[i].gpio;
     port["mode"] = ports[i].mode;
@@ -373,7 +373,7 @@ void handleConfigurePort() {
     return;
   }
 
-  JsonDocument doc;
+  StaticJsonDocument<256> doc;
   DeserializationError error = deserializeJson(doc, server.arg("plain"));
 
   if (error) {
@@ -423,7 +423,7 @@ void handleConfigurePort() {
   // Save config
   saveConfig();
 
-  JsonDocument response;
+  StaticJsonDocument<256> response;
   response["success"] = true;
   response["port"] = gpio;
   response["mode"] = mode;
@@ -440,7 +440,7 @@ void handleAdopt() {
     return;
   }
 
-  JsonDocument doc;
+  StaticJsonDocument<256> doc;
   deserializeJson(doc, server.arg("plain"));
 
   String newBoardId = doc["board_id"] | "";
@@ -462,7 +462,7 @@ void handleAdopt() {
   MDNS.begin(boardId.c_str());
   MDNS.addService("http", "tcp", 8080);
 
-  JsonDocument response;
+  StaticJsonDocument<128> response;
   response["success"] = true;
   response["board_id"] = boardId;
 
@@ -479,7 +479,7 @@ void handleSendIR() {
     return;
   }
 
-  JsonDocument doc;
+  StaticJsonDocument<256> doc;
   deserializeJson(doc, server.arg("plain"));
 
   int output = doc["output"] | -1;
@@ -527,7 +527,7 @@ void handleTestOutput() {
     return;
   }
 
-  JsonDocument doc;
+  StaticJsonDocument<128> doc;
   deserializeJson(doc, server.arg("plain"));
 
   int output = doc["output"] | -1;
@@ -567,7 +567,7 @@ void handleLearningStart() {
     return;
   }
 
-  JsonDocument doc;
+  StaticJsonDocument<128> doc;
   deserializeJson(doc, server.arg("plain"));
 
   int port = doc["port"] | 34;  // Default to GPIO34
@@ -575,7 +575,7 @@ void handleLearningStart() {
   // Initialize receiver on specified port
   initIRReceiver(port);
 
-  JsonDocument response;
+  StaticJsonDocument<128> response;
   response["success"] = true;
   response["port"] = port;
 
@@ -597,14 +597,14 @@ void handleLearningStop() {
 }
 
 void handleLearningStatus() {
-  JsonDocument doc;
+  StaticJsonDocument<512> doc;
 
   doc["active"] = (activeReceiverPort >= 0);
   doc["port"] = activeReceiverPort;
 
   // Check if we received a code
   if (irReceiver != nullptr && irReceiver->decode(&irResults)) {
-    JsonObject receivedCode = doc["received_code"].to<JsonObject>();
+    JsonObject receivedCode = doc.createNestedObject("received_code");
     receivedCode["protocol"] = typeToString(irResults.decode_type);
     receivedCode["code"] = "0x" + uint64ToString(irResults.value, HEX);
     receivedCode["bits"] = irResults.bits;

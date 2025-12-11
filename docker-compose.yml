@@ -1,0 +1,22 @@
+# Docker Compose for VDA IR Control development/testing
+# Run: docker-compose up -d
+
+services:
+  homeassistant:
+    container_name: homeassistant
+    image: ghcr.io/home-assistant/home-assistant:stable
+    volumes:
+      - ./config:/config
+      - /etc/localtime:/etc/localtime:ro
+    restart: unless-stopped
+    # IMPORTANT: network_mode: host required for discovering ESP32 boards on local network
+    network_mode: host
+
+  mosquitto:
+    container_name: mosquitto
+    image: eclipse-mosquitto:2
+    volumes:
+      - ./mosquitto:/mosquitto
+    ports:
+      - "1883:1883"
+    restart: unless-stopped

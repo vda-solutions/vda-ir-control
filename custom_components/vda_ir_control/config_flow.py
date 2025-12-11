@@ -189,11 +189,11 @@ class VdaIrControlConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         boards = {}
         session = async_get_clientsession(self.hass)
 
-        # IPs to scan - include localhost for testing
-        ips_to_scan = ["127.0.0.1"]
+        # IPs to scan - prioritize 192.168.4.x (common for ESP32 AP/WiFi)
+        ips_to_scan = []
 
-        # Add common subnet ranges
-        for subnet in ["192.168.1", "192.168.4", "192.168.0", "10.0.0"]:
+        # Add common subnet ranges - 192.168.4.x first since ESP32s often use this
+        for subnet in ["192.168.4", "192.168.1", "192.168.0", "10.0.0"]:
             for i in range(1, 255):
                 ips_to_scan.append(f"{subnet}.{i}")
 

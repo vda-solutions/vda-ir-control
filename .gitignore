@@ -11,16 +11,8 @@ venv/
 dist/
 build/
 
-# Home Assistant config (runtime files - keep custom_components source)
-config/.storage/
-config/home-assistant_v2.db
-config/home-assistant.log*
-config/*.log
-config/tts/
-config/blueprints/
-config/custom_components/vda_ir_control/__pycache__/
-config/.HA_VERSION
-config/.ha_run.lock
+# Home Assistant test instance (exclude all runtime data)
+config/
 
 # IDE
 .idea/

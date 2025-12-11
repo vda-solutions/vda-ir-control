@@ -43,12 +43,14 @@ This guide covers flashing the VDA IR Control firmware to ESP32 boards.
    ```bash
    # For ESP32-POE-ISO (Ethernet)
    esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 921600 \
-     write_flash -z 0x1000 firmware-esp32-poe-iso.bin
+     write_flash -z 0x0 firmware-esp32-poe-iso.bin
 
    # For ESP32 DevKit (WiFi)
    esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 921600 \
-     write_flash -z 0x1000 firmware-esp32-devkit-wifi.bin
+     write_flash -z 0x0 firmware-esp32-devkit-wifi.bin
    ```
+
+   > **Note**: The pre-built firmware binaries include the bootloader and partition table, so they must be flashed to address `0x0`.
 
    On macOS, the port is typically `/dev/cu.usbserial-XXXX` or `/dev/cu.SLAB_USBtoUART`
    On Windows, use `COM3` or similar
@@ -130,7 +132,7 @@ After flashing, the board will:
 1. Initialize Ethernet (wait for PoE or connect via USB power)
 2. Obtain IP address via DHCP
 3. Start mDNS service as `vda-ir-XXXXXX.local`
-4. Start HTTP server on port 8080
+4. Start HTTP server on port 80
 
 ### ESP32 DevKit (WiFi)
 
@@ -141,19 +143,28 @@ After flashing, the board will:
    - SSID: `VDA-IR-XXXXXX`
    - Password: `vda-ir-setup`
    - IP: `192.168.4.1`
-3. Connect to `http://192.168.4.1:8080` to configure WiFi
+   - Built-in LED blinks fast to indicate AP mode ready
+3. Connect to the AP and a captive portal will auto-open for WiFi setup
 4. After WiFi configured, board reboots and connects to your network
+5. LED turns solid on when connected successfully
 
 #### Configure WiFi (DevKit)
 
+The easiest method is to use the captive portal:
+1. Connect to the `VDA-IR-XXXXXX` WiFi network (password: `vda-ir-setup`)
+2. A captive portal will auto-open with a setup page
+3. Select your WiFi network from the list and enter the password
+4. Board will reboot and connect to your WiFi
+
+Alternatively, use the REST API:
 1. Connect to the `VDA-IR-XXXXXX` WiFi network (password: `vda-ir-setup`)
 2. Scan for networks:
    ```bash
-   curl http://192.168.4.1:8080/wifi/scan
+   curl http://192.168.4.1/wifi/scan
    ```
 3. Configure WiFi:
    ```bash
-   curl -X POST http://192.168.4.1:8080/wifi/config \
+   curl -X POST http://192.168.4.1/wifi/config \
      -H "Content-Type: application/json" \
      -d '{"ssid":"YourNetwork","password":"YourPassword"}'
    ```
@@ -168,7 +179,7 @@ After flashing, the board will:
 
 2. Access the board info:
    ```bash
-   curl http://<board-ip>:8080/info
+   curl http://<board-ip>/info
    ```
 
    Expected response:
@@ -178,7 +189,7 @@ After flashing, the board will:
      "board_name": "VDA IR Controller",
      "mac_address": "AA:BB:CC:DD:EE:FF",
      "ip_address": "192.168.1.100",
-     "firmware_version": "1.0.0",
+     "firmware_version": "1.1.0",
      "connection_type": "ethernet",
      "adopted": false,
      "total_ports": 16
@@ -276,7 +287,7 @@ Connect via USB and monitor at 115200 baud to see:
 **Ethernet (POE-ISO):**
 ```
 ========================================
-   VDA IR Control Firmware v1.0.0
+   VDA IR Control Firmware v1.1.0
    Mode: Ethernet (ESP32-POE-ISO)
 ========================================
 
@@ -285,7 +296,7 @@ ETH: Started
 ETH: Connected
 ETH: Got IP - 192.168.1.100
 mDNS: vda-ir-abc123.local
-HTTP server started on port 8080
+HTTP server started on port 80
 
 === Ready! ===
 IP Address: 192.168.1.100
@@ -294,7 +305,7 @@ IP Address: 192.168.1.100
 **WiFi (DevKit):**
 ```
 ========================================
-   VDA IR Control Firmware v1.0.0
+   VDA IR Control Firmware v1.1.0
    Mode: WiFi (ESP32 DevKit)
 ========================================
 
@@ -302,10 +313,11 @@ Loaded config: boardId=vda-ir-xyz789, ports=23
 Connecting to WiFi: MyNetwork
 WiFi: Got IP - 192.168.1.101
 mDNS: vda-ir-xyz789.local
-HTTP server started on port 8080
+HTTP server started on port 80
 
 === Ready! ===
 IP Address: 192.168.1.101
+LED: Solid ON (connected)
 ```
 
 ## Updating Firmware

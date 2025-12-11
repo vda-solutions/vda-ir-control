@@ -50,10 +50,12 @@ The firmware (`firmware/src/main.cpp`) uses conditional compilation for dual boa
 - `USE_WIFI` - ESP32 DevKit with WiFi (includes AP mode for setup)
 
 Key components:
-- **WebServer** on port 8080 - REST API for all operations
+- **WebServer** on port 80 - REST API for all operations
 - **IRsend/IRrecv** - IR transmission and learning via IRremoteESP8266 library
 - **Preferences** - NVS flash storage for persistent configuration
 - **mDNS** - Device discovery as `vda-ir-XXXXXX.local`
+- **DNSServer** (WiFi only) - Captive portal for easy WiFi setup
+- **LED Status** (WiFi only) - GPIO2 LED indicates connection state
 
 REST API endpoints: `/info`, `/status`, `/ports`, `/ports/configure`, `/adopt`, `/send_ir`, `/test_output`, `/learning/start`, `/learning/stop`, `/learning/status`, `/wifi/scan`, `/wifi/config`
 
@@ -157,12 +159,29 @@ After completing changes that warrant a new version:
    cd firmware && pio run
    ```
 
-3. **Copy binaries to releases folder with version suffix**:
+3. **Create merged firmware binaries** (includes bootloader + partition table):
    ```bash
    VERSION="X.Y.Z"  # e.g., "1.1.0"
-   cp firmware/.pio/build/esp32-poe-iso/firmware.bin "releases/firmware-esp32-poe-iso-v${VERSION}.bin"
-   cp firmware/.pio/build/esp32-devkit/firmware.bin "releases/firmware-esp32-devkit-wifi-v${VERSION}.bin"
+   cd firmware
+
+   # Create merged binary for POE-ISO
+   pio pkg exec -p tool-esptoolpy -- esptool.py --chip esp32 merge_bin \
+     -o "../releases/firmware-esp32-poe-iso-v${VERSION}.bin" \
+     --flash_mode dio --flash_size 4MB \
+     0x1000 .pio/build/esp32-poe-iso/bootloader.bin \
+     0x8000 .pio/build/esp32-poe-iso/partitions.bin \
+     0x10000 .pio/build/esp32-poe-iso/firmware.bin
+
+   # Create merged binary for DevKit WiFi
+   pio pkg exec -p tool-esptoolpy -- esptool.py --chip esp32 merge_bin \
+     -o "../releases/firmware-esp32-devkit-wifi-v${VERSION}.bin" \
+     --flash_mode dio --flash_size 4MB \
+     0x1000 .pio/build/esp32-devkit/bootloader.bin \
+     0x8000 .pio/build/esp32-devkit/partitions.bin \
+     0x10000 .pio/build/esp32-devkit/firmware.bin
    ```
+
+   **IMPORTANT**: Release binaries MUST be merged to include bootloader. Users flash to address `0x0`.
 
    **Firmware naming convention**: `firmware-<board>-v<version>.bin`
    - `firmware-esp32-poe-iso-v1.1.0.bin`

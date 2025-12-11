@@ -36,15 +36,17 @@ Download the pre-built firmware for your board from [Releases](https://github.co
 
 | Board | Firmware File | Size |
 |-------|---------------|------|
-| Olimex ESP32-POE-ISO | [`firmware-esp32-poe-iso.bin`](https://github.com/vda-solutions/vda-ir-control/releases/latest/download/firmware-esp32-poe-iso.bin) | ~950 KB |
-| ESP32 DevKit (WiFi) | [`firmware-esp32-devkit-wifi.bin`](https://github.com/vda-solutions/vda-ir-control/releases/latest/download/firmware-esp32-devkit-wifi.bin) | ~910 KB |
+| Olimex ESP32-POE-ISO | [`firmware-esp32-poe-iso.bin`](https://github.com/vda-solutions/vda-ir-control/releases/latest/download/firmware-esp32-poe-iso.bin) | ~1020 KB |
+| ESP32 DevKit (WiFi) | [`firmware-esp32-devkit-wifi.bin`](https://github.com/vda-solutions/vda-ir-control/releases/latest/download/firmware-esp32-devkit-wifi.bin) | ~993 KB |
 
 Flash using [esptool](https://github.com/espressif/esptool):
 ```bash
 pip install esptool
 esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 921600 \
-  write_flash -z 0x1000 firmware-esp32-poe-iso.bin
+  write_flash -z 0x0 firmware-esp32-devkit-wifi.bin
 ```
+
+> **Note**: The firmware binary includes bootloader and partition table - flash to address `0x0`.
 
 Or use the browser-based [ESP Web Tools](https://web.esphome.io/) flasher.
 
@@ -59,7 +61,7 @@ See [FIRMWARE_GUIDE.md](FIRMWARE_GUIDE.md) for detailed instructions.
 
 **WiFi (ESP32 DevKit):**
 - Board starts AP mode: `VDA-IR-XXXXXX` (password: `vda-ir-setup`)
-- Connect and configure WiFi at `http://192.168.4.1:8080`
+- Connect to the AP and a captive portal auto-opens for WiFi setup
 - Board reboots and joins your network
 
 ### 3. Install Home Assistant Integration
@@ -210,7 +212,7 @@ GPIO34 ── IR Receiver OUT (or GPIO 35, 36, 39)
 
 ## REST API Reference
 
-The ESP32 firmware exposes a REST API on port 8080:
+The ESP32 firmware exposes a REST API on port 80:
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -231,15 +233,15 @@ The ESP32 firmware exposes a REST API on port 8080:
 
 ```bash
 # Get board info
-curl http://192.168.1.100:8080/info
+curl http://192.168.1.100/info
 
 # Configure a port as IR output
-curl -X POST http://192.168.1.100:8080/ports/configure \
+curl -X POST http://192.168.1.100/ports/configure \
   -H "Content-Type: application/json" \
   -d '{"port": 4, "mode": "ir_output", "name": "TV Output"}'
 
 # Send IR code
-curl -X POST http://192.168.1.100:8080/send_ir \
+curl -X POST http://192.168.1.100/send_ir \
   -H "Content-Type: application/json" \
   -d '{"output": 4, "code": "20DF10EF", "protocol": "nec"}'
 ```
@@ -250,7 +252,7 @@ curl -X POST http://192.168.1.100:8080/send_ir \
 
 1. Ensure the ESP32 has an IP address (check router DHCP or serial output)
 2. Verify board is on the same network/VLAN as Home Assistant
-3. Try accessing `http://<board-ip>:8080/info` directly
+3. Try accessing `http://<board-ip>/info` directly
 4. For WiFi boards, ensure they've connected to your network (not still in AP mode)
 
 ### IR codes not working

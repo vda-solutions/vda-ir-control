@@ -568,6 +568,77 @@ class VDAIRControlCard extends HTMLElement {
           color: white;
           border-color: var(--success-color, #4caf50);
         }
+        .remote-btn {
+          padding: 12px 16px;
+          border: none;
+          border-radius: 8px;
+          background: var(--secondary-background-color, #e0e0e0);
+          color: var(--primary-text-color, #212121);
+          cursor: pointer;
+          font-size: 14px;
+          font-weight: 500;
+          transition: all 0.15s;
+          min-width: 50px;
+        }
+        .remote-btn:hover {
+          background: var(--primary-color);
+          color: white;
+          transform: scale(1.05);
+        }
+        .remote-btn:active {
+          transform: scale(0.95);
+        }
+        .remote-btn.power {
+          background: var(--error-color, #f44336);
+          color: white;
+          font-size: 18px;
+          padding: 12px 24px;
+        }
+        .remote-btn.power:hover {
+          background: #d32f2f;
+        }
+        .remote-btn.nav {
+          width: 50px;
+          height: 50px;
+          padding: 0;
+          font-size: 18px;
+        }
+        .remote-btn.nav.ok {
+          background: var(--primary-color);
+          color: white;
+          border-radius: 50%;
+        }
+        .remote-btn.vol, .remote-btn.chan {
+          width: 50px;
+          height: 40px;
+          font-size: 20px;
+          font-weight: bold;
+        }
+        .remote-btn.vol.mute {
+          font-size: 16px;
+        }
+        .remote-btn.num {
+          width: 50px;
+          height: 45px;
+          font-size: 18px;
+          font-weight: 600;
+        }
+        .remote-btn.input {
+          font-size: 11px;
+          padding: 8px 12px;
+        }
+        .remote-btn.play {
+          font-size: 16px;
+          padding: 10px 14px;
+        }
+        .remote-btn.play.record {
+          color: var(--error-color, #f44336);
+        }
+        .remote-section {
+          padding: 12px;
+          background: var(--secondary-background-color, #f5f5f5);
+          border-radius: 12px;
+        }
         .modal {
           position: fixed;
           top: 0;
@@ -897,6 +968,8 @@ class VDAIRControlCard extends HTMLElement {
         return this._renderLearnCommandsModal();
       case 'edit-port':
         return this._renderEditPortModal();
+      case 'remote-control':
+        return this._renderRemoteControlModal();
       default:
         return '';
     }
@@ -1168,6 +1241,181 @@ class VDAIRControlCard extends HTMLElement {
     `;
   }
 
+  _renderRemoteControlModal() {
+    const device = this._devices.find(d => d.device_id === this._modal.deviceId);
+    if (!device) return '';
+
+    // Get commands based on profile type
+    const profileId = device.device_profile_id;
+    let commands = [];
+    let profileName = '';
+    let protocol = '';
+
+    if (profileId.startsWith('builtin:')) {
+      const builtinId = profileId.substring(8);
+      const profile = this._builtinProfiles.find(p => p.profile_id === builtinId);
+      if (profile) {
+        commands = Object.keys(profile.codes || {});
+        profileName = profile.name;
+        protocol = profile.protocol;
+      }
+    } else {
+      const profile = this._profiles.find(p => p.profile_id === profileId);
+      if (profile) {
+        commands = profile.learned_commands || [];
+        profileName = profile.name;
+      }
+    }
+
+    // Group commands by category
+    const powerCmds = commands.filter(c => c.includes('power'));
+    const volCmds = commands.filter(c => c.includes('volume') || c === 'mute');
+    const chanCmds = commands.filter(c => c.includes('channel'));
+    const navCmds = commands.filter(c => ['up', 'down', 'left', 'right', 'enter', 'select', 'back', 'exit', 'menu', 'home', 'guide', 'info'].includes(c));
+    const numCmds = commands.filter(c => /^[0-9]$/.test(c) || c.includes('digit'));
+    const inputCmds = commands.filter(c => c.includes('hdmi') || c.includes('source') || c.includes('input') || c.includes('av') || c.includes('component'));
+    const playCmds = commands.filter(c => ['play', 'pause', 'play_pause', 'stop', 'rewind', 'fast_forward', 'record', 'replay', 'skip_prev', 'skip_next'].includes(c));
+    const otherCmds = commands.filter(c =>
+      !powerCmds.includes(c) && !volCmds.includes(c) && !chanCmds.includes(c) &&
+      !navCmds.includes(c) && !numCmds.includes(c) && !inputCmds.includes(c) && !playCmds.includes(c)
+    );
+
+    return `
+      <div class="modal" data-action="close-modal">
+        <div class="modal-content" onclick="event.stopPropagation()" style="max-width: 450px;">
+          <div class="modal-title" style="display: flex; justify-content: space-between; align-items: center;">
+            <span>Remote: ${device.name}</span>
+            <span class="badge badge-info">${profileName}</span>
+          </div>
+
+          ${protocol ? `<div style="font-size: 11px; color: var(--secondary-text-color); margin-bottom: 16px;">Protocol: ${protocol}</div>` : ''}
+
+          ${this._modal.lastSent ? `
+            <div style="padding: 8px 12px; background: var(--success-color, #4caf50); color: white; border-radius: 6px; margin-bottom: 16px; text-align: center; font-size: 13px;">
+              Sent: ${this._formatCommand(this._modal.lastSent)}
+            </div>
+          ` : ''}
+
+          <div class="remote-layout" style="display: flex; flex-direction: column; gap: 16px;">
+
+            <!-- Power -->
+            ${powerCmds.length > 0 ? `
+              <div class="remote-section">
+                <div style="display: flex; justify-content: center; gap: 8px; flex-wrap: wrap;">
+                  ${powerCmds.map(cmd => `
+                    <button class="remote-btn power" data-action="send-remote-cmd" data-command="${cmd}">
+                      ${cmd === 'power' ? '⏻' : cmd === 'power_on' ? '⏻ On' : cmd === 'power_off' ? '⏻ Off' : this._formatCommand(cmd)}
+                    </button>
+                  `).join('')}
+                </div>
+              </div>
+            ` : ''}
+
+            <!-- Navigation D-pad -->
+            ${navCmds.length > 0 ? `
+              <div class="remote-section">
+                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; max-width: 180px; margin: 0 auto;">
+                  <div></div>
+                  ${navCmds.includes('up') ? `<button class="remote-btn nav" data-action="send-remote-cmd" data-command="up">▲</button>` : '<div></div>'}
+                  <div></div>
+                  ${navCmds.includes('left') ? `<button class="remote-btn nav" data-action="send-remote-cmd" data-command="left">◀</button>` : '<div></div>'}
+                  ${navCmds.includes('select') || navCmds.includes('enter') ? `<button class="remote-btn nav ok" data-action="send-remote-cmd" data-command="${navCmds.includes('select') ? 'select' : 'enter'}">OK</button>` : '<div></div>'}
+                  ${navCmds.includes('right') ? `<button class="remote-btn nav" data-action="send-remote-cmd" data-command="right">▶</button>` : '<div></div>'}
+                  <div></div>
+                  ${navCmds.includes('down') ? `<button class="remote-btn nav" data-action="send-remote-cmd" data-command="down">▼</button>` : '<div></div>'}
+                  <div></div>
+                </div>
+                <div style="display: flex; justify-content: center; gap: 8px; margin-top: 8px; flex-wrap: wrap;">
+                  ${navCmds.filter(c => !['up','down','left','right','select','enter'].includes(c)).map(cmd => `
+                    <button class="remote-btn" data-action="send-remote-cmd" data-command="${cmd}">${this._formatCommand(cmd)}</button>
+                  `).join('')}
+                </div>
+              </div>
+            ` : ''}
+
+            <!-- Volume & Channel -->
+            ${volCmds.length > 0 || chanCmds.length > 0 ? `
+              <div class="remote-section" style="display: flex; justify-content: space-around;">
+                ${volCmds.length > 0 ? `
+                  <div style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
+                    <span style="font-size: 11px; color: var(--secondary-text-color);">Volume</span>
+                    ${volCmds.includes('volume_up') ? `<button class="remote-btn vol" data-action="send-remote-cmd" data-command="volume_up">+</button>` : ''}
+                    ${volCmds.includes('mute') ? `<button class="remote-btn vol mute" data-action="send-remote-cmd" data-command="mute">🔇</button>` : ''}
+                    ${volCmds.includes('volume_down') ? `<button class="remote-btn vol" data-action="send-remote-cmd" data-command="volume_down">−</button>` : ''}
+                  </div>
+                ` : ''}
+                ${chanCmds.length > 0 ? `
+                  <div style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
+                    <span style="font-size: 11px; color: var(--secondary-text-color);">Channel</span>
+                    ${chanCmds.includes('channel_up') ? `<button class="remote-btn chan" data-action="send-remote-cmd" data-command="channel_up">▲</button>` : ''}
+                    ${chanCmds.includes('channel_down') ? `<button class="remote-btn chan" data-action="send-remote-cmd" data-command="channel_down">▼</button>` : ''}
+                  </div>
+                ` : ''}
+              </div>
+            ` : ''}
+
+            <!-- Number Pad -->
+            ${numCmds.length > 0 ? `
+              <div class="remote-section">
+                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; max-width: 180px; margin: 0 auto;">
+                  ${['1','2','3','4','5','6','7','8','9','','0',''].map(n => {
+                    if (n === '') return '<div></div>';
+                    const cmd = numCmds.find(c => c === n || c === `digit_${n}` || c.endsWith(n));
+                    return cmd ? `<button class="remote-btn num" data-action="send-remote-cmd" data-command="${cmd}">${n}</button>` : '<div></div>';
+                  }).join('')}
+                </div>
+              </div>
+            ` : ''}
+
+            <!-- Input Selection -->
+            ${inputCmds.length > 0 ? `
+              <div class="remote-section">
+                <div style="font-size: 11px; color: var(--secondary-text-color); margin-bottom: 8px; text-align: center;">Inputs</div>
+                <div style="display: flex; justify-content: center; gap: 6px; flex-wrap: wrap;">
+                  ${inputCmds.map(cmd => `
+                    <button class="remote-btn input" data-action="send-remote-cmd" data-command="${cmd}">${this._formatCommand(cmd)}</button>
+                  `).join('')}
+                </div>
+              </div>
+            ` : ''}
+
+            <!-- Playback Controls -->
+            ${playCmds.length > 0 ? `
+              <div class="remote-section">
+                <div style="display: flex; justify-content: center; gap: 6px; flex-wrap: wrap;">
+                  ${playCmds.includes('rewind') ? `<button class="remote-btn play" data-action="send-remote-cmd" data-command="rewind">⏪</button>` : ''}
+                  ${playCmds.includes('play') ? `<button class="remote-btn play" data-action="send-remote-cmd" data-command="play">▶</button>` : ''}
+                  ${playCmds.includes('play_pause') ? `<button class="remote-btn play" data-action="send-remote-cmd" data-command="play_pause">⏯</button>` : ''}
+                  ${playCmds.includes('pause') ? `<button class="remote-btn play" data-action="send-remote-cmd" data-command="pause">⏸</button>` : ''}
+                  ${playCmds.includes('stop') ? `<button class="remote-btn play" data-action="send-remote-cmd" data-command="stop">⏹</button>` : ''}
+                  ${playCmds.includes('fast_forward') ? `<button class="remote-btn play" data-action="send-remote-cmd" data-command="fast_forward">⏩</button>` : ''}
+                  ${playCmds.includes('record') ? `<button class="remote-btn play record" data-action="send-remote-cmd" data-command="record">⏺</button>` : ''}
+                </div>
+              </div>
+            ` : ''}
+
+            <!-- Other Commands -->
+            ${otherCmds.length > 0 ? `
+              <div class="remote-section">
+                <div style="font-size: 11px; color: var(--secondary-text-color); margin-bottom: 8px; text-align: center;">Other</div>
+                <div style="display: flex; justify-content: center; gap: 6px; flex-wrap: wrap;">
+                  ${otherCmds.map(cmd => `
+                    <button class="remote-btn" data-action="send-remote-cmd" data-command="${cmd}">${this._formatCommand(cmd)}</button>
+                  `).join('')}
+                </div>
+              </div>
+            ` : ''}
+
+          </div>
+
+          <div class="modal-actions">
+            <button class="btn btn-secondary" data-action="close-modal">Close</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   _getCommandsForType(deviceType) {
     const commands = {
       cable_box: [
@@ -1323,7 +1571,13 @@ class VDAIRControlCard extends HTMLElement {
         break;
 
       case 'test-device':
-        await this._testDevice(e.target.dataset.deviceId);
+        // Open remote control modal instead of just testing power
+        this._modal = { type: 'remote-control', deviceId: e.target.dataset.deviceId };
+        this._render();
+        break;
+
+      case 'send-remote-cmd':
+        await this._sendRemoteCommand(e.target.dataset.command);
         break;
 
       case 'close-modal':
@@ -1562,19 +1816,28 @@ class VDAIRControlCard extends HTMLElement {
     }
   }
 
-  async _testDevice(deviceId) {
-    const device = this._devices.find(d => d.device_id === deviceId);
-    if (!device) return;
+  async _sendRemoteCommand(command) {
+    if (!this._modal || !this._modal.deviceId) return;
 
     try {
       await this._hass.callService('vda_ir_control', 'send_command', {
-        device_id: deviceId,
-        command: 'power_toggle',
+        device_id: this._modal.deviceId,
+        command: command,
       });
-      alert('Sent power_toggle command');
+      // Update modal to show last sent command
+      this._modal.lastSent = command;
+      this._render();
+
+      // Clear the "sent" indicator after 1.5 seconds
+      setTimeout(() => {
+        if (this._modal && this._modal.lastSent === command) {
+          this._modal.lastSent = null;
+          this._render();
+        }
+      }, 1500);
     } catch (e) {
-      console.error('Failed to test device:', e);
-      alert('Failed to send command (maybe power_toggle not learned yet)');
+      console.error('Failed to send command:', e);
+      alert(`Failed to send ${command}`);
     }
   }
 

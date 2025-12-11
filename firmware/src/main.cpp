@@ -1234,12 +1234,18 @@ void handleSendIR() {
 
   if (protocol == "nec") {
     irSenders[portIndex]->sendNEC(codeValue);
+  } else if (protocol == "samsung") {
+    irSenders[portIndex]->sendSAMSUNG(codeValue);
   } else if (protocol == "sony") {
     irSenders[portIndex]->sendSony(codeValue);
   } else if (protocol == "rc5") {
     irSenders[portIndex]->sendRC5(codeValue);
   } else if (protocol == "rc6") {
     irSenders[portIndex]->sendRC6(codeValue);
+  } else if (protocol == "lg") {
+    irSenders[portIndex]->sendLG(codeValue);
+  } else if (protocol == "panasonic") {
+    irSenders[portIndex]->sendPanasonic(0x4004, codeValue);  // Standard Panasonic address
   } else {
     // Send as raw NEC by default
     irSenders[portIndex]->sendNEC(codeValue);

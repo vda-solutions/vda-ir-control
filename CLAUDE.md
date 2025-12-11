@@ -234,3 +234,38 @@ When the user requests changes to the firmware or integration code, Claude shoul
 - **GitHub**: https://github.com/vda-solutions/vda-ir-control
 - **Main branch**: `main`
 - **Release assets**: Pre-built firmware binaries for both board types
+
+## Development & Testing
+
+### Local HA Testing with Docker
+
+Use the included `docker-compose.yml` to run Home Assistant locally:
+
+```bash
+# Start Home Assistant and Mosquitto
+docker-compose up -d
+
+# View logs
+docker logs -f homeassistant
+
+# Restart after integration changes
+docker restart homeassistant
+```
+
+**IMPORTANT**: The docker-compose uses `network_mode: host` which is required for HA to discover ESP32 boards on the local network. Without this, the container runs in an isolated network and cannot reach local devices.
+
+### Copying Integration Changes to Test Instance
+
+After modifying the integration code, copy to the test HA instance:
+
+```bash
+cp -r custom_components/vda_ir_control config/custom_components/
+docker restart homeassistant
+```
+
+### Discovery Notes
+
+- Board discovery scans subnets: `192.168.4.x`, `192.168.1.x`, `192.168.0.x`, `10.0.0.x`
+- `192.168.4.x` is prioritized since ESP32s often use this subnet
+- Discovery timeout is 2 seconds per IP
+- Manual IP entry is available if discovery fails

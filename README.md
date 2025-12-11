@@ -61,8 +61,18 @@ See [FIRMWARE_GUIDE.md](FIRMWARE_GUIDE.md) for detailed instructions.
 
 **WiFi (ESP32 DevKit):**
 - Board starts AP mode: `VDA-IR-XXXXXX` (password: `vda-ir-setup`)
+- Built-in LED (GPIO2) blinks fast to indicate AP mode ready
 - Connect to the AP and a captive portal auto-opens for WiFi setup
 - Board reboots and joins your network
+- LED turns solid when connected successfully
+
+**LED Status Indicators (WiFi DevKit only):**
+| LED Pattern | Meaning |
+|-------------|---------|
+| Slow blink (500ms) | Booting / Connecting to WiFi |
+| Fast blink (150ms) | AP mode ready, waiting for configuration |
+| Solid on | Connected and operational |
+| Double blink | Error state |
 
 ### 3. Install Home Assistant Integration
 
@@ -294,6 +304,22 @@ pio run -e esp32-devkit
 # Upload to connected board
 pio run -e esp32-poe-iso -t upload
 ```
+
+## Development Setup
+
+For testing the integration locally with Home Assistant in Docker:
+
+```bash
+# Start Home Assistant and Mosquitto
+docker-compose up -d
+
+# Access Home Assistant at http://localhost:8123
+
+# View logs
+docker logs -f homeassistant
+```
+
+> **Important**: The docker-compose.yml uses `network_mode: host` so Home Assistant can discover ESP32 boards on your local network.
 
 ## Contributing
 

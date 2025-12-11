@@ -23,7 +23,7 @@ class VDAIRBoardCoordinator(DataUpdateCoordinator):
         board_id: str,
         ip_address: str,
         mac_address: str,
-        port: int = 8080,
+        port: int = 80,
     ):
         """Initialize the coordinator."""
         super().__init__(

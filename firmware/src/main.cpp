@@ -10,6 +10,8 @@
  * - IR learning/receiving on input-only GPIO pins
  * - mDNS discovery
  * - Persistent configuration storage
+ * - Captive portal for WiFi setup (WiFi boards)
+ * - LED status indication
  */
 
 #include <Arduino.h>
@@ -21,11 +23,41 @@
 #include <IRsend.h>
 #include <IRrecv.h>
 #include <IRutils.h>
+#include <DNSServer.h>
 
 #ifdef USE_ETHERNET
   #include <ETH.h>
 #else
   #include <WiFi.h>
+#endif
+
+// ============ LED Configuration ============
+#ifdef USE_ETHERNET
+  // Olimex ESP32-POE-ISO doesn't have a user LED on a standard pin
+  #define STATUS_LED_PIN -1
+#else
+  // ESP32 DevKit has built-in LED on GPIO2
+  #define STATUS_LED_PIN 2
+#endif
+
+// LED States
+enum LedState {
+  LED_OFF,
+  LED_ON,
+  LED_BLINK_SLOW,    // Booting / Connecting
+  LED_BLINK_FAST,    // AP Mode ready
+  LED_BLINK_PATTERN  // Error
+};
+
+LedState currentLedState = LED_OFF;
+unsigned long lastLedToggle = 0;
+bool ledOn = false;
+
+// ============ Captive Portal ============
+#ifdef USE_WIFI
+  DNSServer dnsServer;
+  const byte DNS_PORT = 53;
+  bool captivePortalActive = false;
 #endif
 
 // ============ WiFi Credentials (for DevKit) ============
@@ -43,8 +75,9 @@
   const int OUTPUT_CAPABLE_COUNT = 12;
 #else
   // ESP32 DevKit - more GPIOs available (no Ethernet)
-  const int OUTPUT_CAPABLE_PINS[] = {2, 4, 5, 12, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33};
-  const int OUTPUT_CAPABLE_COUNT = 19;
+  // Note: GPIO2 is used for LED, so we exclude it from IR use when LED is enabled
+  const int OUTPUT_CAPABLE_PINS[] = {4, 5, 12, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33};
+  const int OUTPUT_CAPABLE_COUNT = 18;
 #endif
 
 // Input-only pins (for IR receiver) - same on both boards
@@ -61,7 +94,7 @@ struct PortConfig {
 #ifdef USE_ETHERNET
   #define MAX_PORTS 16
 #else
-  #define MAX_PORTS 23
+  #define MAX_PORTS 22
 #endif
 
 PortConfig ports[MAX_PORTS];
@@ -79,9 +112,10 @@ String boardName = "VDA IR Controller";
 bool adopted = false;
 
 // ============ Global Objects ============
-WebServer server(8080);
+WebServer server(80);  // Changed to port 80 for captive portal compatibility
 Preferences preferences;
 bool networkConnected = false;
+bool apMode = false;
 
 // ============ Function Declarations ============
 void initNetwork();
@@ -93,6 +127,9 @@ void initIRSender(int portIndex);
 void initIRReceiver(int gpio);
 String getLocalIP();
 String getMacAddress();
+void initLED();
+void setLedState(LedState state);
+void updateLED();
 
 #ifdef USE_ETHERNET
   void onEthEvent(WiFiEvent_t event);
@@ -100,9 +137,13 @@ String getMacAddress();
   void onWiFiEvent(WiFiEvent_t event);
   void handleWiFiConfig();
   void startAPMode();
+  void handleCaptivePortal();
+  String generateSetupPage();
+  String generateSuccessPage();
 #endif
 
 // ============ HTTP Handlers ============
+void handleRoot();
 void handleInfo();
 void handleStatus();
 void handlePorts();
@@ -120,8 +161,12 @@ void setup() {
   Serial.begin(115200);
   delay(1000);
 
+  // Initialize LED first for visual feedback
+  initLED();
+  setLedState(LED_BLINK_SLOW);  // Indicate booting
+
   Serial.println("\n\n========================================");
-  Serial.println("   VDA IR Control Firmware v1.0.0");
+  Serial.println("   VDA IR Control Firmware v1.1.0");
 #ifdef USE_ETHERNET
   Serial.println("   Mode: Ethernet (ESP32-POE-ISO)");
 #else
@@ -150,6 +195,7 @@ void setup() {
 
   while (!networkConnected && timeout < maxTimeout) {
     delay(100);
+    updateLED();
     timeout++;
   }
 
@@ -157,8 +203,8 @@ void setup() {
     // Setup mDNS
     String mdnsName = boardId.length() > 0 ? boardId : "vda-ir-" + String((uint32_t)ESP.getEfuseMac(), HEX);
     if (MDNS.begin(mdnsName.c_str())) {
-      MDNS.addService("http", "tcp", 8080);
-      MDNS.addService("vda-ir", "tcp", 8080);
+      MDNS.addService("http", "tcp", 80);
+      MDNS.addService("vda-ir", "tcp", 80);
       Serial.printf("mDNS: %s.local\n", mdnsName.c_str());
     }
 
@@ -168,22 +214,41 @@ void setup() {
     // Initialize ports
     initPorts();
 
-    Serial.println("\n=== Ready! ===");
+    // Set LED state based on mode
+    if (apMode) {
+      setLedState(LED_BLINK_FAST);  // AP mode ready
+      Serial.println("\n=== AP Mode Ready! ===");
+      Serial.println("Connect to WiFi network shown above");
+      Serial.println("Then open http://192.168.4.1 in your browser");
+    } else {
+      setLedState(LED_ON);  // Connected and ready
+      Serial.println("\n=== Ready! ===");
+    }
+
     Serial.printf("IP Address: %s\n", getLocalIP().c_str());
     Serial.printf("Board ID: %s\n", boardId.c_str());
-    Serial.printf("HTTP Server: http://%s:8080\n", getLocalIP().c_str());
+    Serial.printf("HTTP Server: http://%s/\n", getLocalIP().c_str());
   } else {
     Serial.println("ERROR: Network connection failed!");
+    setLedState(LED_BLINK_PATTERN);  // Error state
 #ifdef USE_WIFI
     Serial.println("Starting AP mode for configuration...");
     startAPMode();
     setupWebServer();
+    setLedState(LED_BLINK_FAST);
 #endif
   }
 }
 
 // ============ Loop ============
 void loop() {
+  // Handle DNS for captive portal
+#ifdef USE_WIFI
+  if (captivePortalActive) {
+    dnsServer.processNextRequest();
+  }
+#endif
+
   server.handleClient();
 
   // Check for IR signals if receiver is active
@@ -194,7 +259,73 @@ void loop() {
     irReceiver->resume();
   }
 
+  // Update LED state
+  updateLED();
+
   delay(1);
+}
+
+// ============ LED Functions ============
+void initLED() {
+#if STATUS_LED_PIN >= 0
+  pinMode(STATUS_LED_PIN, OUTPUT);
+  digitalWrite(STATUS_LED_PIN, LOW);
+  Serial.printf("Status LED initialized on GPIO%d\n", STATUS_LED_PIN);
+#endif
+}
+
+void setLedState(LedState state) {
+  currentLedState = state;
+  lastLedToggle = millis();
+
+#if STATUS_LED_PIN >= 0
+  if (state == LED_OFF) {
+    digitalWrite(STATUS_LED_PIN, LOW);
+    ledOn = false;
+  } else if (state == LED_ON) {
+    digitalWrite(STATUS_LED_PIN, HIGH);
+    ledOn = true;
+  }
+#endif
+}
+
+void updateLED() {
+#if STATUS_LED_PIN >= 0
+  unsigned long now = millis();
+
+  switch (currentLedState) {
+    case LED_BLINK_SLOW:
+      if (now - lastLedToggle >= 500) {
+        ledOn = !ledOn;
+        digitalWrite(STATUS_LED_PIN, ledOn ? HIGH : LOW);
+        lastLedToggle = now;
+      }
+      break;
+
+    case LED_BLINK_FAST:
+      if (now - lastLedToggle >= 150) {
+        ledOn = !ledOn;
+        digitalWrite(STATUS_LED_PIN, ledOn ? HIGH : LOW);
+        lastLedToggle = now;
+      }
+      break;
+
+    case LED_BLINK_PATTERN:
+      // Double blink pattern for error
+      {
+        unsigned long cycle = (now / 100) % 10;
+        bool shouldBeOn = (cycle == 0 || cycle == 2);
+        if (shouldBeOn != ledOn) {
+          ledOn = shouldBeOn;
+          digitalWrite(STATUS_LED_PIN, ledOn ? HIGH : LOW);
+        }
+      }
+      break;
+
+    default:
+      break;
+  }
+#endif
 }
 
 // ============ Network Initialization ============
@@ -218,14 +349,17 @@ void onEthEvent(WiFiEvent_t event) {
       Serial.printf("ETH: Got IP - %s\n", ETH.localIP().toString().c_str());
       Serial.printf("ETH: MAC - %s\n", ETH.macAddress().c_str());
       networkConnected = true;
+      setLedState(LED_ON);
       break;
     case ARDUINO_EVENT_ETH_DISCONNECTED:
       Serial.println("ETH: Disconnected");
       networkConnected = false;
+      setLedState(LED_BLINK_SLOW);
       break;
     case ARDUINO_EVENT_ETH_STOP:
       Serial.println("ETH: Stopped");
       networkConnected = false;
+      setLedState(LED_OFF);
       break;
     default:
       break;
@@ -265,14 +399,18 @@ void onWiFiEvent(WiFiEvent_t event) {
       Serial.printf("WiFi: Got IP - %s\n", WiFi.localIP().toString().c_str());
       Serial.printf("WiFi: MAC - %s\n", WiFi.macAddress().c_str());
       networkConnected = true;
+      apMode = false;
+      setLedState(LED_ON);
       break;
     case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
       Serial.println("WiFi: Disconnected");
       networkConnected = false;
+      setLedState(LED_BLINK_SLOW);
       break;
     case ARDUINO_EVENT_WIFI_AP_START:
       Serial.println("WiFi AP: Started");
       networkConnected = true;
+      apMode = true;
       break;
     case ARDUINO_EVENT_WIFI_AP_STACONNECTED:
       Serial.println("WiFi AP: Client connected");
@@ -284,15 +422,29 @@ void onWiFiEvent(WiFiEvent_t event) {
 
 void startAPMode() {
   String apName = "VDA-IR-" + String((uint32_t)ESP.getEfuseMac(), HEX);
-  Serial.printf("Starting AP: %s\n", apName.c_str());
+  apName.toUpperCase();
+
+  Serial.printf("Starting AP: %s (password: vda-ir-setup)\n", apName.c_str());
+
   WiFi.mode(WIFI_AP);
+  WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0));
   WiFi.softAP(apName.c_str(), "vda-ir-setup");
+
+  // Start DNS server for captive portal
+  dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
+  dnsServer.start(DNS_PORT, "*", WiFi.softAPIP());
+  captivePortalActive = true;
+
   Serial.printf("AP IP: %s\n", WiFi.softAPIP().toString().c_str());
+  Serial.println("Captive portal DNS started - all domains redirect to setup page");
+
   networkConnected = true;
+  apMode = true;
+  setLedState(LED_BLINK_FAST);
 }
 
 String getLocalIP() {
-  if (WiFi.getMode() == WIFI_AP) {
+  if (WiFi.getMode() == WIFI_AP || apMode) {
     return WiFi.softAPIP().toString();
   }
   return WiFi.localIP().toString();
@@ -300,6 +452,341 @@ String getLocalIP() {
 
 String getMacAddress() {
   return WiFi.macAddress();
+}
+
+// ============ Captive Portal Page ============
+String generateSetupPage() {
+  String apName = "VDA-IR-" + String((uint32_t)ESP.getEfuseMac(), HEX);
+  apName.toUpperCase();
+
+  String html = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VDA IR Control Setup</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .container {
+      background: white;
+      border-radius: 16px;
+      padding: 32px;
+      width: 100%;
+      max-width: 400px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    }
+    .logo {
+      text-align: center;
+      margin-bottom: 24px;
+    }
+    .logo h1 {
+      color: #1a1a2e;
+      font-size: 24px;
+      margin-bottom: 8px;
+    }
+    .logo p {
+      color: #666;
+      font-size: 14px;
+    }
+    .device-id {
+      background: #f0f4f8;
+      border-radius: 8px;
+      padding: 12px;
+      text-align: center;
+      margin-bottom: 24px;
+      font-family: monospace;
+      font-size: 14px;
+      color: #1a1a2e;
+    }
+    .form-group {
+      margin-bottom: 20px;
+    }
+    label {
+      display: block;
+      margin-bottom: 8px;
+      color: #333;
+      font-weight: 500;
+    }
+    select, input[type="password"], input[type="text"] {
+      width: 100%;
+      padding: 12px 16px;
+      border: 2px solid #e0e0e0;
+      border-radius: 8px;
+      font-size: 16px;
+      transition: border-color 0.2s;
+    }
+    select:focus, input:focus {
+      outline: none;
+      border-color: #4a90d9;
+    }
+    .password-container {
+      position: relative;
+    }
+    .toggle-password {
+      position: absolute;
+      right: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      cursor: pointer;
+      color: #666;
+      font-size: 14px;
+    }
+    button[type="submit"] {
+      width: 100%;
+      padding: 14px;
+      background: linear-gradient(135deg, #4a90d9 0%, #357abd 100%);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    button[type="submit"]:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(74, 144, 217, 0.4);
+    }
+    button[type="submit"]:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: none;
+    }
+    .scanning {
+      text-align: center;
+      padding: 20px;
+      color: #666;
+    }
+    .spinner {
+      border: 3px solid #f3f3f3;
+      border-top: 3px solid #4a90d9;
+      border-radius: 50%;
+      width: 24px;
+      height: 24px;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 12px;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    .network-item {
+      display: flex;
+      align-items: center;
+      padding: 12px;
+      border: 2px solid #e0e0e0;
+      border-radius: 8px;
+      margin-bottom: 8px;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+    }
+    .network-item:hover {
+      border-color: #4a90d9;
+      background: #f8fafc;
+    }
+    .network-item.selected {
+      border-color: #4a90d9;
+      background: #e8f4fd;
+    }
+    .network-name {
+      flex: 1;
+      font-weight: 500;
+    }
+    .network-signal {
+      color: #666;
+      font-size: 12px;
+    }
+    .signal-icon {
+      margin-left: 8px;
+    }
+    .refresh-btn {
+      background: none;
+      border: none;
+      color: #4a90d9;
+      cursor: pointer;
+      font-size: 14px;
+      margin-bottom: 12px;
+    }
+    .error {
+      background: #fee;
+      color: #c00;
+      padding: 12px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      font-size: 14px;
+    }
+    .led-indicator {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      background: #4ade80;
+      border-radius: 50%;
+      margin-right: 8px;
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="logo">
+      <h1>🎛️ VDA IR Control</h1>
+      <p>WiFi Setup</p>
+    </div>
+
+    <div class="device-id">
+      <span class="led-indicator"></span>
+      )rawliteral" + apName + R"rawliteral(
+    </div>
+
+    <div id="networks-container">
+      <div class="scanning">
+        <div class="spinner"></div>
+        Scanning for networks...
+      </div>
+    </div>
+
+    <form id="wifi-form" style="display:none;">
+      <div class="form-group">
+        <label>WiFi Network</label>
+        <select id="ssid" name="ssid" required>
+          <option value="">Select a network...</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label>Password</label>
+        <div class="password-container">
+          <input type="password" id="password" name="password" placeholder="Enter WiFi password">
+          <button type="button" class="toggle-password" onclick="togglePassword()">Show</button>
+        </div>
+      </div>
+
+      <button type="submit" id="connect-btn">Connect</button>
+    </form>
+  </div>
+
+  <script>
+    let networks = [];
+
+    async function scanNetworks() {
+      try {
+        const response = await fetch('/wifi/scan');
+        const data = await response.json();
+        networks = data.networks || [];
+        displayNetworks();
+      } catch (error) {
+        document.getElementById('networks-container').innerHTML =
+          '<div class="error">Failed to scan networks. Please refresh the page.</div>';
+      }
+    }
+
+    function displayNetworks() {
+      const container = document.getElementById('networks-container');
+      const form = document.getElementById('wifi-form');
+      const select = document.getElementById('ssid');
+
+      if (networks.length === 0) {
+        container.innerHTML = '<div class="error">No networks found. Please try again.</div>' +
+          '<button class="refresh-btn" onclick="scanNetworks()">🔄 Scan Again</button>';
+        return;
+      }
+
+      container.innerHTML = '<button class="refresh-btn" onclick="scanNetworks()">🔄 Scan Again</button>';
+
+      select.innerHTML = '<option value="">Select a network...</option>';
+      networks.forEach(net => {
+        const signal = net.rssi > -50 ? '▓▓▓▓' : net.rssi > -70 ? '▓▓▓░' : net.rssi > -80 ? '▓▓░░' : '▓░░░';
+        const option = document.createElement('option');
+        option.value = net.ssid;
+        option.textContent = net.ssid + ' ' + signal + (net.secure ? ' 🔒' : '');
+        select.appendChild(option);
+      });
+
+      form.style.display = 'block';
+    }
+
+    function togglePassword() {
+      const input = document.getElementById('password');
+      const btn = document.querySelector('.toggle-password');
+      if (input.type === 'password') {
+        input.type = 'text';
+        btn.textContent = 'Hide';
+      } else {
+        input.type = 'password';
+        btn.textContent = 'Show';
+      }
+    }
+
+    document.getElementById('wifi-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const btn = document.getElementById('connect-btn');
+      const ssid = document.getElementById('ssid').value;
+      const password = document.getElementById('password').value;
+
+      if (!ssid) {
+        alert('Please select a network');
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = 'Connecting...';
+
+      try {
+        const response = await fetch('/wifi/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ssid, password })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+          document.querySelector('.container').innerHTML = `
+            <div class="logo">
+              <h1>✅ WiFi Configured!</h1>
+              <p>The device is restarting...</p>
+            </div>
+            <div style="text-align:center; color:#666; margin-top:20px;">
+              <p>The device will connect to <strong>${ssid}</strong></p>
+              <p style="margin-top:12px;">You can close this page and find the device on your network.</p>
+              <p style="margin-top:12px; font-size:12px;">Look for it at: <code>vda-ir-XXXXXX.local</code></p>
+            </div>
+          `;
+        } else {
+          throw new Error(data.error || 'Configuration failed');
+        }
+      } catch (error) {
+        btn.disabled = false;
+        btn.textContent = 'Connect';
+        alert('Failed to configure WiFi: ' + error.message);
+      }
+    });
+
+    // Start scanning on page load
+    scanNetworks();
+  </script>
+</body>
+</html>
+)rawliteral";
+
+  return html;
 }
 
 void handleWiFiConfig() {
@@ -344,8 +831,14 @@ void handleWiFiConfig() {
   server.send(200, "application/json", responseStr);
 
   Serial.println("WiFi configured. Rebooting...");
+  setLedState(LED_BLINK_SLOW);
   delay(1000);
   ESP.restart();
+}
+
+void handleCaptivePortal() {
+  // Serve the setup page for captive portal detection URLs
+  server.send(200, "text/html", generateSetupPage());
 }
 
 #endif
@@ -451,6 +944,10 @@ void initIRReceiver(int gpio) {
 
 // ============ Web Server Setup ============
 void setupWebServer() {
+  // Root handler - serve setup page in AP mode, info otherwise
+  server.on("/", HTTP_GET, handleRoot);
+
+  // API endpoints
   server.on("/info", HTTP_GET, handleInfo);
   server.on("/status", HTTP_GET, handleStatus);
   server.on("/ports", HTTP_GET, handlePorts);
@@ -465,8 +962,11 @@ void setupWebServer() {
 #ifdef USE_WIFI
   server.on("/wifi/config", HTTP_POST, handleWiFiConfig);
   server.on("/wifi/scan", HTTP_GET, []() {
+    Serial.println("Scanning WiFi networks...");
     int n = WiFi.scanNetworks();
-    StaticJsonDocument<1024> doc;
+    Serial.printf("Found %d networks\n", n);
+
+    StaticJsonDocument<2048> doc;
     JsonArray networks = doc.createNestedArray("networks");
     for (int i = 0; i < n && i < 20; i++) {
       JsonObject net = networks.createNestedObject();
@@ -478,16 +978,36 @@ void setupWebServer() {
     serializeJson(doc, response);
     server.send(200, "application/json", response);
   });
+
+  // Captive portal detection endpoints
+  server.on("/generate_204", HTTP_GET, handleCaptivePortal);  // Android
+  server.on("/gen_204", HTTP_GET, handleCaptivePortal);        // Android
+  server.on("/hotspot-detect.html", HTTP_GET, handleCaptivePortal);  // Apple
+  server.on("/library/test/success.html", HTTP_GET, handleCaptivePortal);  // Apple
+  server.on("/ncsi.txt", HTTP_GET, handleCaptivePortal);       // Windows
+  server.on("/connecttest.txt", HTTP_GET, handleCaptivePortal); // Windows
+  server.on("/fwlink", HTTP_GET, handleCaptivePortal);         // Windows
 #endif
 
   server.onNotFound(handleNotFound);
 
   server.enableCORS(true);
   server.begin();
-  Serial.println("HTTP server started on port 8080");
+  Serial.println("HTTP server started on port 80");
 }
 
 // ============ HTTP Handlers ============
+void handleRoot() {
+#ifdef USE_WIFI
+  if (apMode) {
+    server.send(200, "text/html", generateSetupPage());
+    return;
+  }
+#endif
+  // In normal mode, redirect to /info or show a simple status
+  handleInfo();
+}
+
 void handleInfo() {
   StaticJsonDocument<512> doc;
 
@@ -495,7 +1015,7 @@ void handleInfo() {
   doc["board_name"] = boardName;
   doc["mac_address"] = getMacAddress();
   doc["ip_address"] = getLocalIP();
-  doc["firmware_version"] = "1.0.0";
+  doc["firmware_version"] = "1.1.0";
   doc["adopted"] = adopted;
   doc["total_ports"] = portCount;
 
@@ -504,7 +1024,7 @@ void handleInfo() {
 #else
   doc["connection_type"] = "wifi";
   doc["wifi_configured"] = wifiConfigured;
-  if (WiFi.getMode() == WIFI_AP) {
+  if (apMode) {
     doc["wifi_mode"] = "ap";
   } else {
     doc["wifi_mode"] = "station";
@@ -535,7 +1055,7 @@ void handleStatus() {
   doc["network_connected"] = networkConnected;
 
 #ifdef USE_WIFI
-  if (WiFi.getMode() == WIFI_STA) {
+  if (!apMode && WiFi.getMode() == WIFI_STA) {
     doc["wifi_rssi"] = WiFi.RSSI();
   }
 #endif
@@ -669,7 +1189,7 @@ void handleAdopt() {
   // Update mDNS
   MDNS.end();
   MDNS.begin(boardId.c_str());
-  MDNS.addService("http", "tcp", 8080);
+  MDNS.addService("http", "tcp", 80);
 
   StaticJsonDocument<128> response;
   response["success"] = true;
@@ -827,5 +1347,13 @@ void handleLearningStatus() {
 }
 
 void handleNotFound() {
+#ifdef USE_WIFI
+  // In AP mode, redirect all unknown requests to the setup page (captive portal)
+  if (apMode) {
+    server.sendHeader("Location", "http://192.168.4.1/", true);
+    server.send(302, "text/plain", "Redirecting to setup...");
+    return;
+  }
+#endif
   server.send(404, "application/json", "{\"error\":\"Not found\"}");
 }

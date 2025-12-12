@@ -106,6 +106,14 @@ IRrecv* irReceiver = nullptr;
 decode_results irResults;
 int activeReceiverPort = -1;
 
+// ============ Serial Bridge Configuration ============
+HardwareSerial SerialBridge(1);  // UART1 for serial bridge
+bool serialBridgeEnabled = false;
+int serialBridgeRxPin = -1;
+int serialBridgeTxPin = -1;
+int serialBridgeBaud = 115200;
+String serialBridgeBuffer = "";
+
 // ============ Board Configuration ============
 String boardId = "";
 String boardName = "VDA IR Controller";
@@ -156,6 +164,13 @@ void handleLearningStop();
 void handleLearningStatus();
 void handleNotFound();
 
+// Serial Bridge Handlers
+void handleSerialConfig();
+void handleSerialSend();
+void handleSerialRead();
+void handleSerialStatus();
+void initSerialBridge(int rxPin, int txPin, int baud);
+
 // ============ Setup ============
 void setup() {
   Serial.begin(115200);
@@ -166,7 +181,7 @@ void setup() {
   setLedState(LED_BLINK_SLOW);  // Indicate booting
 
   Serial.println("\n\n========================================");
-  Serial.println("   VDA IR Control Firmware v1.1.0");
+  Serial.println("   VDA IR Control Firmware v1.2.0");
 #ifdef USE_ETHERNET
   Serial.println("   Mode: Ethernet (ESP32-POE-ISO)");
 #else
@@ -959,6 +974,12 @@ void setupWebServer() {
   server.on("/learning/stop", HTTP_POST, handleLearningStop);
   server.on("/learning/status", HTTP_GET, handleLearningStatus);
 
+  // Serial bridge endpoints
+  server.on("/serial/config", HTTP_POST, handleSerialConfig);
+  server.on("/serial/send", HTTP_POST, handleSerialSend);
+  server.on("/serial/read", HTTP_GET, handleSerialRead);
+  server.on("/serial/status", HTTP_GET, handleSerialStatus);
+
 #ifdef USE_WIFI
   server.on("/wifi/config", HTTP_POST, handleWiFiConfig);
   server.on("/wifi/scan", HTTP_GET, []() {
@@ -1015,7 +1036,7 @@ void handleInfo() {
   doc["board_name"] = boardName;
   doc["mac_address"] = getMacAddress();
   doc["ip_address"] = getLocalIP();
-  doc["firmware_version"] = "1.1.0";
+  doc["firmware_version"] = "1.2.0";
   doc["adopted"] = adopted;
   doc["total_ports"] = portCount;
 
@@ -1350,6 +1371,224 @@ void handleLearningStatus() {
   String response;
   serializeJson(doc, response);
   server.send(200, "application/json", response);
+}
+
+// ============ Serial Bridge Handlers ============
+
+void initSerialBridge(int rxPin, int txPin, int baud) {
+  if (serialBridgeEnabled) {
+    SerialBridge.end();
+  }
+
+  serialBridgeRxPin = rxPin;
+  serialBridgeTxPin = txPin;
+  serialBridgeBaud = baud;
+
+  SerialBridge.begin(baud, SERIAL_8N1, rxPin, txPin);
+  serialBridgeEnabled = true;
+  serialBridgeBuffer = "";
+
+  Serial.printf("Serial bridge initialized: RX=%d, TX=%d, Baud=%d\n", rxPin, txPin, baud);
+}
+
+void handleSerialConfig() {
+  if (!server.hasArg("plain")) {
+    server.send(400, "application/json", "{\"error\":\"No body\"}");
+    return;
+  }
+
+  StaticJsonDocument<256> doc;
+  DeserializationError error = deserializeJson(doc, server.arg("plain"));
+
+  if (error) {
+    server.send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+    return;
+  }
+
+  int rxPin = doc["rx_pin"] | -1;
+  int txPin = doc["tx_pin"] | -1;
+  int baud = doc["baud_rate"] | 115200;
+
+  if (rxPin < 0 || txPin < 0) {
+    server.send(400, "application/json", "{\"error\":\"rx_pin and tx_pin required\"}");
+    return;
+  }
+
+  // Validate pins based on board type
+#ifdef USE_ETHERNET
+  // Olimex: Recommended UART1 on GPIO9 (RX) / GPIO10 (TX)
+  Serial.printf("Olimex board: Configuring serial on RX=%d, TX=%d\n", rxPin, txPin);
+#else
+  // DevKit: UART1 on GPIO16/17 or UART2 on GPIO25/26
+  Serial.printf("DevKit board: Configuring serial on RX=%d, TX=%d\n", rxPin, txPin);
+#endif
+
+  initSerialBridge(rxPin, txPin, baud);
+
+  StaticJsonDocument<256> response;
+  response["success"] = true;
+  response["rx_pin"] = rxPin;
+  response["tx_pin"] = txPin;
+  response["baud_rate"] = baud;
+
+  String responseStr;
+  serializeJson(response, responseStr);
+  server.send(200, "application/json", responseStr);
+}
+
+void handleSerialSend() {
+  if (!serialBridgeEnabled) {
+    server.send(400, "application/json", "{\"error\":\"Serial bridge not configured\"}");
+    return;
+  }
+
+  if (!server.hasArg("plain")) {
+    server.send(400, "application/json", "{\"error\":\"No body\"}");
+    return;
+  }
+
+  StaticJsonDocument<512> doc;
+  DeserializationError error = deserializeJson(doc, server.arg("plain"));
+
+  if (error) {
+    server.send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+    return;
+  }
+
+  String data = doc["data"] | "";
+  String format = doc["format"] | "text";
+  String lineEnding = doc["line_ending"] | "none";
+  int timeout = doc["timeout"] | 1000;  // Response timeout in ms
+  bool waitResponse = doc["wait_response"] | true;
+
+  if (data.length() == 0) {
+    server.send(400, "application/json", "{\"error\":\"data required\"}");
+    return;
+  }
+
+  // Clear any pending data in the buffer
+  while (SerialBridge.available()) {
+    SerialBridge.read();
+  }
+  serialBridgeBuffer = "";
+
+  // Send data
+  if (format == "hex") {
+    // Parse hex string and send bytes
+    for (size_t i = 0; i < data.length(); i += 2) {
+      if (i + 1 < data.length()) {
+        String byteStr = data.substring(i, i + 2);
+        uint8_t b = (uint8_t)strtol(byteStr.c_str(), nullptr, 16);
+        SerialBridge.write(b);
+      }
+    }
+  } else {
+    // Send as text
+    SerialBridge.print(data);
+  }
+
+  // Add line ending
+  if (lineEnding == "cr") {
+    SerialBridge.write('\r');
+  } else if (lineEnding == "lf") {
+    SerialBridge.write('\n');
+  } else if (lineEnding == "crlf") {
+    SerialBridge.write('\r');
+    SerialBridge.write('\n');
+  } else if (lineEnding == "!") {
+    SerialBridge.write('!');
+  }
+
+  Serial.printf("Serial sent: %s (format=%s, ending=%s)\n", data.c_str(), format.c_str(), lineEnding.c_str());
+
+  // Wait for response if requested
+  String response = "";
+  if (waitResponse && timeout > 0) {
+    unsigned long start = millis();
+    while (millis() - start < (unsigned long)timeout) {
+      while (SerialBridge.available()) {
+        char c = SerialBridge.read();
+        response += c;
+        // Check for common terminators
+        if (c == '\n' || c == '\r' || c == '!') {
+          // Give a little more time for additional data
+          delay(50);
+          while (SerialBridge.available()) {
+            response += (char)SerialBridge.read();
+          }
+          break;
+        }
+      }
+      if (response.length() > 0) {
+        break;
+      }
+      delay(10);
+    }
+  }
+
+  // Trim response
+  response.trim();
+
+  Serial.printf("Serial response: %s\n", response.c_str());
+
+  StaticJsonDocument<512> respDoc;
+  respDoc["success"] = true;
+  respDoc["response"] = response;
+  respDoc["response_length"] = response.length();
+
+  String respStr;
+  serializeJson(respDoc, respStr);
+  server.send(200, "application/json", respStr);
+}
+
+void handleSerialRead() {
+  if (!serialBridgeEnabled) {
+    server.send(400, "application/json", "{\"error\":\"Serial bridge not configured\"}");
+    return;
+  }
+
+  // Read any available data
+  String data = "";
+  while (SerialBridge.available()) {
+    data += (char)SerialBridge.read();
+  }
+
+  StaticJsonDocument<512> response;
+  response["success"] = true;
+  response["data"] = data;
+  response["length"] = data.length();
+
+  String responseStr;
+  serializeJson(response, responseStr);
+  server.send(200, "application/json", responseStr);
+}
+
+void handleSerialStatus() {
+  StaticJsonDocument<256> response;
+
+  response["enabled"] = serialBridgeEnabled;
+  response["rx_pin"] = serialBridgeRxPin;
+  response["tx_pin"] = serialBridgeTxPin;
+  response["baud_rate"] = serialBridgeBaud;
+  response["available"] = serialBridgeEnabled ? SerialBridge.available() : 0;
+
+#ifdef USE_ETHERNET
+  response["board_type"] = "olimex_poe_iso";
+  JsonObject recommended = response.createNestedObject("recommended_pins");
+  recommended["uart1_rx"] = 9;
+  recommended["uart1_tx"] = 10;
+#else
+  response["board_type"] = "esp32_devkit";
+  JsonObject recommended = response.createNestedObject("recommended_pins");
+  recommended["uart1_rx"] = 16;
+  recommended["uart1_tx"] = 17;
+  recommended["uart2_rx"] = 25;
+  recommended["uart2_tx"] = 26;
+#endif
+
+  String responseStr;
+  serializeJson(response, responseStr);
+  server.send(200, "application/json", responseStr);
 }
 
 void handleNotFound() {

@@ -24,6 +24,15 @@ class VDAIRControlCard extends HTMLElement {
     this._builtinProfiles = [];
     this._builtinManufacturers = [];
     this._builtinDeviceTypes = [];
+    // Network devices state
+    this._networkDevices = [];
+    this._selectedNetworkDevice = null;
+    this._networkTestResult = null;
+    // Serial devices state
+    this._serialDevices = [];
+    this._selectedSerialDevice = null;
+    this._serialTestResult = null;
+    this._availableSerialPorts = [];
   }
 
   set hass(hass) {
@@ -53,6 +62,8 @@ class VDAIRControlCard extends HTMLElement {
       this._loadBuiltinProfiles(),
       this._loadDevices(),
       this._loadGPIOPins(),
+      this._loadNetworkDevices(),
+      this._loadSerialDevices(),
     ]);
     this._render();
   }
@@ -226,6 +237,95 @@ class VDAIRControlCard extends HTMLElement {
     } catch (e) {
       console.error('Failed to load devices:', e);
       this._devices = [];
+    }
+  }
+
+  async _loadNetworkDevices() {
+    try {
+      const resp = await fetch('/api/vda_ir_control/network_devices', {
+        headers: {
+          'Authorization': `Bearer ${this._hass.auth.data.access_token}`,
+        },
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        this._networkDevices = data.devices || [];
+      } else {
+        this._networkDevices = [];
+      }
+    } catch (e) {
+      console.error('Failed to load network devices:', e);
+      this._networkDevices = [];
+    }
+  }
+
+  async _loadNetworkDevice(deviceId) {
+    try {
+      const resp = await fetch(`/api/vda_ir_control/network_devices/${deviceId}`, {
+        headers: {
+          'Authorization': `Bearer ${this._hass.auth.data.access_token}`,
+        },
+      });
+      if (resp.ok) {
+        return await resp.json();
+      }
+    } catch (e) {
+      console.error('Failed to load network device:', e);
+    }
+    return null;
+  }
+
+  async _loadSerialDevices() {
+    try {
+      const resp = await fetch('/api/vda_ir_control/serial_devices', {
+        headers: {
+          'Authorization': `Bearer ${this._hass.auth.data.access_token}`,
+        },
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        this._serialDevices = data.devices || [];
+      } else {
+        this._serialDevices = [];
+      }
+    } catch (e) {
+      console.error('Failed to load serial devices:', e);
+      this._serialDevices = [];
+    }
+  }
+
+  async _loadSerialDevice(deviceId) {
+    try {
+      const resp = await fetch(`/api/vda_ir_control/serial_devices/${deviceId}`, {
+        headers: {
+          'Authorization': `Bearer ${this._hass.auth.data.access_token}`,
+        },
+      });
+      if (resp.ok) {
+        return await resp.json();
+      }
+    } catch (e) {
+      console.error('Failed to load serial device:', e);
+    }
+    return null;
+  }
+
+  async _loadAvailableSerialPorts() {
+    try {
+      const resp = await fetch('/api/vda_ir_control/serial_ports', {
+        headers: {
+          'Authorization': `Bearer ${this._hass.auth.data.access_token}`,
+        },
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        this._availableSerialPorts = data.ports || [];
+      } else {
+        this._availableSerialPorts = [];
+      }
+    } catch (e) {
+      console.error('Failed to load serial ports:', e);
+      this._availableSerialPorts = [];
     }
   }
 
@@ -690,6 +790,12 @@ class VDAIRControlCard extends HTMLElement {
           <button class="tab ${this._activeTab === 'devices' ? 'active' : ''}" data-tab="devices">
             Devices
           </button>
+          <button class="tab ${this._activeTab === 'network' ? 'active' : ''}" data-tab="network">
+            Network
+          </button>
+          <button class="tab ${this._activeTab === 'serial' ? 'active' : ''}" data-tab="serial">
+            Serial
+          </button>
         </div>
 
         <div class="content">
@@ -711,6 +817,10 @@ class VDAIRControlCard extends HTMLElement {
         return this._renderProfilesTab();
       case 'devices':
         return this._renderDevicesTab();
+      case 'network':
+        return this._renderNetworkTab();
+      case 'serial':
+        return this._renderSerialTab();
       default:
         return '';
     }
@@ -956,6 +1066,228 @@ class VDAIRControlCard extends HTMLElement {
     `;
   }
 
+  _renderNetworkTab() {
+    return `
+      <div class="section">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+          <div class="section-title" style="margin-bottom: 0;">Network Devices</div>
+          <button class="btn btn-primary btn-small" data-action="create-network-device">
+            + Add Network Device
+          </button>
+        </div>
+
+        ${this._networkDevices.length === 0 ? `
+          <div class="empty-state">
+            <div class="empty-state-icon">🌐</div>
+            <p>No network devices</p>
+            <p style="font-size: 12px;">Add devices controlled via TCP/UDP (e.g., HDMI matrices)</p>
+          </div>
+        ` : this._networkDevices.map(device => `
+          <div class="list-item ${this._selectedNetworkDevice === device.device_id ? 'selected' : ''}"
+               data-action="select-network-device" data-device-id="${device.device_id}">
+            <div class="list-item-content">
+              <div class="list-item-title">
+                ${device.name}
+                <span class="badge ${device.connected ? 'badge-success' : 'badge-danger'}">
+                  ${device.connected ? 'Online' : 'Offline'}
+                </span>
+                ${device.location ? `<span class="badge badge-warning">${device.location}</span>` : ''}
+              </div>
+              <div class="list-item-subtitle">
+                ${device.host}:${device.port} (${device.protocol.toUpperCase()}) • ${device.command_count} commands
+              </div>
+            </div>
+            <div class="list-item-actions">
+              <button class="btn btn-secondary btn-small" data-action="test-network-device" data-device-id="${device.device_id}">
+                Test
+              </button>
+              <button class="btn btn-secondary btn-small" data-action="edit-network-device" data-device-id="${device.device_id}">
+                Commands
+              </button>
+              <button class="btn btn-danger btn-small" data-action="delete-network-device" data-device-id="${device.device_id}">
+                Delete
+              </button>
+            </div>
+          </div>
+        `).join('')}
+
+        ${this._selectedNetworkDevice ? this._renderNetworkDeviceCommands() : ''}
+      </div>
+
+      ${this._renderNetworkTestResult()}
+    `;
+  }
+
+  _renderNetworkDeviceCommands() {
+    const device = this._networkDevices.find(d => d.device_id === this._selectedNetworkDevice);
+    if (!device) return '';
+
+    return `
+      <div class="section" style="margin-top: 16px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+          <div class="section-title" style="margin-bottom: 0;">Commands for ${device.name}</div>
+          <button class="btn btn-primary btn-small" data-action="add-network-command" data-device-id="${device.device_id}">
+            + Add Command
+          </button>
+        </div>
+        <div class="command-list">
+          ${!device.commands || Object.keys(device.commands || {}).length === 0 ? `
+            <p style="color: var(--secondary-text-color); font-size: 12px;">No commands configured. Add commands to control this device.</p>
+          ` : Object.entries(device.commands || {}).map(([id, cmd]) => `
+            <div class="command-item" style="display: flex; align-items: center; padding: 8px; background: var(--secondary-background-color); border-radius: 6px; margin-bottom: 4px;">
+              <div style="flex: 1;">
+                <div style="font-weight: 500;">${cmd.name}</div>
+                <div style="font-size: 11px; color: var(--secondary-text-color);">
+                  ${cmd.payload} ${cmd.line_ending !== 'none' ? `[${cmd.line_ending.toUpperCase()}]` : ''}
+                  ${cmd.is_input_option ? '<span style="color: var(--info-color);">[Input]</span>' : ''}
+                  ${cmd.is_query ? '<span style="color: var(--warning-color);">[Query]</span>' : ''}
+                </div>
+              </div>
+              <button class="btn btn-secondary btn-small" data-action="send-network-command"
+                      data-device-id="${device.device_id}" data-command-id="${id}">
+                Send
+              </button>
+              <button class="btn btn-danger btn-small" style="margin-left: 4px;" data-action="delete-network-command"
+                      data-device-id="${device.device_id}" data-command-id="${id}">
+                ×
+              </button>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
+  }
+
+  _renderNetworkTestResult() {
+    if (!this._networkTestResult) return '';
+
+    const result = this._networkTestResult;
+    return `
+      <div class="section" style="margin-top: 16px;">
+        <div class="section-title">Test Result</div>
+        <div style="padding: 12px; background: var(--secondary-background-color); border-radius: 8px;
+                    border-left: 4px solid ${result.success ? 'var(--success-color, #4caf50)' : 'var(--error-color, #f44336)'};">
+          <div style="font-weight: 500; margin-bottom: 4px;">${result.success ? 'Success' : 'Failed'}</div>
+          <div style="font-size: 12px; color: var(--secondary-text-color);">
+            ${result.message || (result.response ? `Response: ${result.response}` : 'No response')}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  _renderSerialTab() {
+    return `
+      <div class="section">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+          <div class="section-title" style="margin-bottom: 0;">Serial Devices</div>
+          <button class="btn btn-primary btn-small" data-action="create-serial-device">
+            + Add Serial Device
+          </button>
+        </div>
+
+        ${this._serialDevices.length === 0 ? `
+          <div class="empty-state">
+            <div class="empty-state-icon">🔌</div>
+            <p>No serial devices</p>
+            <p style="font-size: 12px;">Add devices controlled via serial port (direct or via ESP32 bridge)</p>
+          </div>
+        ` : this._serialDevices.map(device => `
+          <div class="list-item ${this._selectedSerialDevice === device.device_id ? 'selected' : ''}"
+               data-action="select-serial-device" data-device-id="${device.device_id}">
+            <div class="list-item-content">
+              <div class="list-item-title">
+                ${device.name}
+                <span class="badge ${device.connected ? 'badge-success' : 'badge-danger'}">
+                  ${device.connected ? 'Online' : 'Offline'}
+                </span>
+                <span class="badge badge-info">${device.mode === 'direct' ? 'Direct' : 'ESP32 Bridge'}</span>
+                ${device.location ? `<span class="badge badge-warning">${device.location}</span>` : ''}
+              </div>
+              <div class="list-item-subtitle">
+                ${device.mode === 'direct' ? device.port : `${device.board_id} UART${device.uart_num}`}
+                @ ${device.baud_rate} baud • ${device.command_count || 0} commands
+              </div>
+            </div>
+            <div class="list-item-actions">
+              <button class="btn btn-secondary btn-small" data-action="test-serial-device" data-device-id="${device.device_id}">
+                Test
+              </button>
+              <button class="btn btn-secondary btn-small" data-action="edit-serial-device" data-device-id="${device.device_id}">
+                Commands
+              </button>
+              <button class="btn btn-danger btn-small" data-action="delete-serial-device" data-device-id="${device.device_id}">
+                Delete
+              </button>
+            </div>
+          </div>
+        `).join('')}
+
+        ${this._selectedSerialDevice ? this._renderSerialDeviceCommands() : ''}
+      </div>
+
+      ${this._renderSerialTestResult()}
+    `;
+  }
+
+  _renderSerialDeviceCommands() {
+    const device = this._serialDevices.find(d => d.device_id === this._selectedSerialDevice);
+    if (!device) return '';
+
+    return `
+      <div class="section" style="margin-top: 16px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+          <div class="section-title" style="margin-bottom: 0;">Commands for ${device.name}</div>
+          <button class="btn btn-primary btn-small" data-action="add-serial-command" data-device-id="${device.device_id}">
+            + Add Command
+          </button>
+        </div>
+        <div class="command-list">
+          ${!device.commands || Object.keys(device.commands || {}).length === 0 ? `
+            <p style="color: var(--secondary-text-color); font-size: 12px;">No commands configured. Add commands to control this device.</p>
+          ` : Object.entries(device.commands || {}).map(([id, cmd]) => `
+            <div class="command-item" style="display: flex; align-items: center; padding: 8px; background: var(--secondary-background-color); border-radius: 6px; margin-bottom: 4px;">
+              <div style="flex: 1;">
+                <div style="font-weight: 500;">${cmd.name}</div>
+                <div style="font-size: 11px; color: var(--secondary-text-color);">
+                  ${cmd.payload} ${cmd.line_ending !== 'none' ? `[${cmd.line_ending.toUpperCase()}]` : ''}
+                  ${cmd.is_input_option ? '<span style="color: var(--info-color);">[Input]</span>' : ''}
+                  ${cmd.is_query ? '<span style="color: var(--warning-color);">[Query]</span>' : ''}
+                </div>
+              </div>
+              <button class="btn btn-secondary btn-small" data-action="send-serial-command"
+                      data-device-id="${device.device_id}" data-command-id="${id}">
+                Send
+              </button>
+              <button class="btn btn-danger btn-small" style="margin-left: 4px;" data-action="delete-serial-command"
+                      data-device-id="${device.device_id}" data-command-id="${id}">
+                ×
+              </button>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
+  }
+
+  _renderSerialTestResult() {
+    if (!this._serialTestResult) return '';
+
+    const result = this._serialTestResult;
+    return `
+      <div class="section" style="margin-top: 16px;">
+        <div class="section-title">Test Result</div>
+        <div style="padding: 12px; background: var(--secondary-background-color); border-radius: 8px;
+                    border-left: 4px solid ${result.success ? 'var(--success-color, #4caf50)' : 'var(--error-color, #f44336)'};">
+          <div style="font-weight: 500; margin-bottom: 4px;">${result.success ? 'Success' : 'Failed'}</div>
+          <div style="font-size: 12px; color: var(--secondary-text-color);">
+            ${result.message || (result.response ? `Response: ${result.response}` : 'No response')}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   _renderModal() {
     if (!this._modal) return '';
 
@@ -970,6 +1302,14 @@ class VDAIRControlCard extends HTMLElement {
         return this._renderEditPortModal();
       case 'remote-control':
         return this._renderRemoteControlModal();
+      case 'create-network-device':
+        return this._renderCreateNetworkDeviceModal();
+      case 'add-network-command':
+        return this._renderAddNetworkCommandModal();
+      case 'create-serial-device':
+        return this._renderCreateSerialDeviceModal();
+      case 'add-serial-command':
+        return this._renderAddSerialCommandModal();
       default:
         return '';
     }
@@ -1466,6 +1806,364 @@ class VDAIRControlCard extends HTMLElement {
     return cmd.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
   }
 
+  _renderCreateNetworkDeviceModal() {
+    return `
+      <div class="modal" data-action="close-modal">
+        <div class="modal-content" style="max-width: 500px;">
+          <div class="modal-header">
+            <h3>Add Network Device</h3>
+            <button class="modal-close" data-action="close-modal">&times;</button>
+          </div>
+          <div class="modal-body">
+            <div class="form-group">
+              <label>Device ID</label>
+              <input type="text" id="network-device-id" placeholder="hdmi_matrix_1" />
+              <small>Unique identifier (lowercase, underscores ok)</small>
+            </div>
+            <div class="form-group">
+              <label>Name</label>
+              <input type="text" id="network-device-name" placeholder="HDMI Matrix" />
+            </div>
+            <div class="form-group">
+              <label>Host/IP Address</label>
+              <input type="text" id="network-device-host" placeholder="192.168.1.100" />
+            </div>
+            <div class="form-group">
+              <label>Port</label>
+              <input type="number" id="network-device-port" value="8000" min="1" max="65535" />
+            </div>
+            <div class="form-group">
+              <label>Protocol</label>
+              <select id="network-device-protocol">
+                <option value="tcp">TCP</option>
+                <option value="udp">UDP</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Device Type</label>
+              <select id="network-device-type">
+                <option value="hdmi_matrix">HDMI Matrix</option>
+                <option value="hdmi_switch">HDMI Switch</option>
+                <option value="av_processor">AV Processor</option>
+                <option value="custom">Custom</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Location (optional)</label>
+              <input type="text" id="network-device-location" placeholder="Living Room" />
+            </div>
+            <div style="margin-top: 16px;">
+              <button class="btn btn-secondary" data-action="test-connection">Test Connection</button>
+              <span id="test-connection-result" style="margin-left: 8px; font-size: 12px;"></span>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" data-action="close-modal">Cancel</button>
+            <button class="btn btn-primary" data-action="save-network-device">Create Device</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  _renderAddNetworkCommandModal() {
+    const deviceId = this._modal?.deviceId;
+    return `
+      <div class="modal" data-action="close-modal">
+        <div class="modal-content" style="max-width: 550px;">
+          <div class="modal-header">
+            <h3>Add Command</h3>
+            <button class="modal-close" data-action="close-modal">&times;</button>
+          </div>
+          <div class="modal-body">
+            <div class="form-group">
+              <label>Command ID</label>
+              <input type="text" id="command-id" placeholder="power_on" />
+              <small>Unique identifier (lowercase, underscores ok)</small>
+            </div>
+            <div class="form-group">
+              <label>Name</label>
+              <input type="text" id="command-name" placeholder="Power On" />
+            </div>
+            <div class="form-group">
+              <label>Payload</label>
+              <input type="text" id="command-payload" placeholder="s power 1" />
+              <small>The command to send (text or hex)</small>
+            </div>
+            <div style="display: flex; gap: 16px;">
+              <div class="form-group" style="flex: 1;">
+                <label>Format</label>
+                <select id="command-format">
+                  <option value="text">Text</option>
+                  <option value="hex">Hex</option>
+                </select>
+              </div>
+              <div class="form-group" style="flex: 1;">
+                <label>Line Ending</label>
+                <select id="command-line-ending">
+                  <option value="none">None</option>
+                  <option value="!">! (Exclamation)</option>
+                  <option value="cr">CR</option>
+                  <option value="lf">LF</option>
+                  <option value="crlf">CRLF</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-group">
+              <label style="display: flex; align-items: center; gap: 8px;">
+                <input type="checkbox" id="command-is-input" />
+                This is an input selection option
+              </label>
+            </div>
+            <div class="form-group" id="input-value-group" style="display: none;">
+              <label>Input Value</label>
+              <input type="text" id="command-input-value" placeholder="1" />
+              <small>The value this input represents (e.g., "1" for HDMI 1)</small>
+            </div>
+            <div class="form-group">
+              <label style="display: flex; align-items: center; gap: 8px;">
+                <input type="checkbox" id="command-is-query" />
+                This is a query command (for state updates)
+              </label>
+            </div>
+            <div class="form-group" id="response-pattern-group" style="display: none;">
+              <label>Response Pattern (regex)</label>
+              <input type="text" id="command-response-pattern" placeholder="input (\\d+)" />
+              <small>Regex to extract state from response</small>
+            </div>
+            <div class="form-group" id="state-key-group" style="display: none;">
+              <label>State Key</label>
+              <input type="text" id="command-state-key" placeholder="current_input" />
+              <small>Which state this updates (current_input, power, etc.)</small>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" data-action="close-modal">Cancel</button>
+            <button class="btn btn-primary" data-action="save-network-command" data-device-id="${deviceId}">Add Command</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  _renderCreateSerialDeviceModal() {
+    const boards = this._getBoards();
+    return `
+      <div class="modal" data-action="close-modal">
+        <div class="modal-content" style="max-width: 550px;">
+          <div class="modal-header">
+            <h3>Add Serial Device</h3>
+            <button class="modal-close" data-action="close-modal">&times;</button>
+          </div>
+          <div class="modal-body">
+            <div class="form-group">
+              <label>Device ID</label>
+              <input type="text" id="serial-device-id" placeholder="hdmi_matrix_1" />
+              <small>Unique identifier (lowercase, underscores ok)</small>
+            </div>
+            <div class="form-group">
+              <label>Name</label>
+              <input type="text" id="serial-device-name" placeholder="HDMI Matrix" />
+            </div>
+            <div class="form-group">
+              <label>Connection Mode</label>
+              <select id="serial-device-mode" data-action="serial-mode-changed">
+                <option value="direct">Direct (USB/Serial on Home Assistant)</option>
+                <option value="bridge">ESP32 Bridge (via IR Board)</option>
+              </select>
+            </div>
+
+            <!-- Direct mode fields -->
+            <div id="serial-direct-fields">
+              <div class="form-group">
+                <label>Serial Port</label>
+                <select id="serial-device-port">
+                  ${this._availableSerialPorts.length === 0 ? `
+                    <option value="">No ports found - enter manually</option>
+                  ` : this._availableSerialPorts.map(p => `
+                    <option value="${p.device}">${p.device} ${p.description ? `(${p.description})` : ''}</option>
+                  `).join('')}
+                </select>
+                <input type="text" id="serial-device-port-manual" placeholder="/dev/ttyUSB0" style="margin-top: 4px;" />
+                <small>Select from list or enter path manually</small>
+              </div>
+            </div>
+
+            <!-- Bridge mode fields -->
+            <div id="serial-bridge-fields" style="display: none;">
+              <div class="form-group">
+                <label>ESP32 Board</label>
+                <select id="serial-device-board">
+                  ${boards.map(b => `
+                    <option value="${b.board_id}">${b.board_name} (${b.ip_address})</option>
+                  `).join('')}
+                  ${boards.length === 0 ? '<option value="">No boards available</option>' : ''}
+                </select>
+              </div>
+              <div style="display: flex; gap: 16px;">
+                <div class="form-group" style="flex: 1;">
+                  <label>UART Number</label>
+                  <select id="serial-device-uart">
+                    <option value="1">UART 1</option>
+                    <option value="2">UART 2</option>
+                  </select>
+                </div>
+                <div class="form-group" style="flex: 1;">
+                  <label>RX Pin (GPIO)</label>
+                  <input type="number" id="serial-device-rx-pin" value="9" min="0" max="39" />
+                </div>
+                <div class="form-group" style="flex: 1;">
+                  <label>TX Pin (GPIO)</label>
+                  <input type="number" id="serial-device-tx-pin" value="10" min="0" max="39" />
+                </div>
+              </div>
+              <small style="color: var(--secondary-text-color);">
+                Olimex POE-ISO: UART1 RX=9, TX=10 | DevKit: UART1 RX=16, TX=17 or UART2 RX=25, TX=26
+              </small>
+            </div>
+
+            <!-- Common fields -->
+            <div style="display: flex; gap: 16px; margin-top: 16px;">
+              <div class="form-group" style="flex: 1;">
+                <label>Baud Rate</label>
+                <select id="serial-device-baud">
+                  <option value="9600">9600</option>
+                  <option value="19200">19200</option>
+                  <option value="38400">38400</option>
+                  <option value="57600">57600</option>
+                  <option value="115200" selected>115200</option>
+                  <option value="230400">230400</option>
+                </select>
+              </div>
+              <div class="form-group" style="flex: 1;">
+                <label>Data Bits</label>
+                <select id="serial-device-data-bits">
+                  <option value="7">7</option>
+                  <option value="8" selected>8</option>
+                </select>
+              </div>
+            </div>
+            <div style="display: flex; gap: 16px;">
+              <div class="form-group" style="flex: 1;">
+                <label>Parity</label>
+                <select id="serial-device-parity">
+                  <option value="N" selected>None</option>
+                  <option value="E">Even</option>
+                  <option value="O">Odd</option>
+                </select>
+              </div>
+              <div class="form-group" style="flex: 1;">
+                <label>Stop Bits</label>
+                <select id="serial-device-stop-bits">
+                  <option value="1" selected>1</option>
+                  <option value="2">2</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-group">
+              <label>Device Type</label>
+              <select id="serial-device-type">
+                <option value="hdmi_matrix">HDMI Matrix</option>
+                <option value="hdmi_switch">HDMI Switch</option>
+                <option value="av_processor">AV Processor</option>
+                <option value="projector">Projector</option>
+                <option value="custom">Custom</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Location (optional)</label>
+              <input type="text" id="serial-device-location" placeholder="Living Room" />
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" data-action="close-modal">Cancel</button>
+            <button class="btn btn-primary" data-action="save-serial-device">Create Device</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  _renderAddSerialCommandModal() {
+    const deviceId = this._modal?.deviceId;
+    return `
+      <div class="modal" data-action="close-modal">
+        <div class="modal-content" style="max-width: 550px;">
+          <div class="modal-header">
+            <h3>Add Serial Command</h3>
+            <button class="modal-close" data-action="close-modal">&times;</button>
+          </div>
+          <div class="modal-body">
+            <div class="form-group">
+              <label>Command ID</label>
+              <input type="text" id="serial-command-id" placeholder="power_on" />
+              <small>Unique identifier (lowercase, underscores ok)</small>
+            </div>
+            <div class="form-group">
+              <label>Name</label>
+              <input type="text" id="serial-command-name" placeholder="Power On" />
+            </div>
+            <div class="form-group">
+              <label>Payload</label>
+              <input type="text" id="serial-command-payload" placeholder="PWR ON" />
+              <small>The command to send (text or hex)</small>
+            </div>
+            <div style="display: flex; gap: 16px;">
+              <div class="form-group" style="flex: 1;">
+                <label>Format</label>
+                <select id="serial-command-format">
+                  <option value="text">Text</option>
+                  <option value="hex">Hex</option>
+                </select>
+              </div>
+              <div class="form-group" style="flex: 1;">
+                <label>Line Ending</label>
+                <select id="serial-command-line-ending">
+                  <option value="none">None</option>
+                  <option value="!">! (Exclamation)</option>
+                  <option value="cr">CR</option>
+                  <option value="lf">LF</option>
+                  <option value="crlf" selected>CRLF</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-group">
+              <label style="display: flex; align-items: center; gap: 8px;">
+                <input type="checkbox" id="serial-command-is-input" />
+                This is an input selection option
+              </label>
+            </div>
+            <div class="form-group" id="serial-input-value-group" style="display: none;">
+              <label>Input Value</label>
+              <input type="text" id="serial-command-input-value" placeholder="1" />
+              <small>The value this input represents (e.g., "1" for HDMI 1)</small>
+            </div>
+            <div class="form-group">
+              <label style="display: flex; align-items: center; gap: 8px;">
+                <input type="checkbox" id="serial-command-is-query" />
+                This is a query command (for state updates)
+              </label>
+            </div>
+            <div class="form-group" id="serial-response-pattern-group" style="display: none;">
+              <label>Response Pattern (regex)</label>
+              <input type="text" id="serial-command-response-pattern" placeholder="INPUT:(\\d+)" />
+              <small>Regex to extract state from response</small>
+            </div>
+            <div class="form-group" id="serial-state-key-group" style="display: none;">
+              <label>State Key</label>
+              <input type="text" id="serial-command-state-key" placeholder="current_input" />
+              <small>Which state this updates (current_input, power, etc.)</small>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" data-action="close-modal">Cancel</button>
+            <button class="btn btn-primary" data-action="save-serial-command" data-device-id="${deviceId}">Add Command</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   _attachEventListeners() {
     // Tab clicks
     this.shadowRoot.querySelectorAll('.tab').forEach(tab => {
@@ -1598,6 +2296,188 @@ class VDAIRControlCard extends HTMLElement {
 
       case 'filter-builtin':
         await this._filterBuiltinProfiles(e.target.value);
+        break;
+
+      // Network device actions
+      case 'create-network-device':
+        this._modal = { type: 'create-network-device' };
+        this._render();
+        break;
+
+      case 'select-network-device':
+        this._selectedNetworkDevice = e.target.closest('[data-device-id]').dataset.deviceId;
+        // Load full device details including commands
+        const deviceDetails = await this._loadNetworkDevice(this._selectedNetworkDevice);
+        if (deviceDetails) {
+          // Update the device in our list with full commands
+          const idx = this._networkDevices.findIndex(d => d.device_id === this._selectedNetworkDevice);
+          if (idx >= 0) {
+            this._networkDevices[idx] = { ...this._networkDevices[idx], commands: deviceDetails.commands };
+          }
+        }
+        this._render();
+        break;
+
+      case 'edit-network-device':
+        this._selectedNetworkDevice = e.target.dataset.deviceId;
+        const details = await this._loadNetworkDevice(this._selectedNetworkDevice);
+        if (details) {
+          const index = this._networkDevices.findIndex(d => d.device_id === this._selectedNetworkDevice);
+          if (index >= 0) {
+            this._networkDevices[index] = { ...this._networkDevices[index], commands: details.commands };
+          }
+        }
+        this._render();
+        break;
+
+      case 'delete-network-device':
+        if (confirm('Are you sure you want to delete this network device?')) {
+          await this._deleteNetworkDevice(e.target.dataset.deviceId);
+        }
+        break;
+
+      case 'test-connection':
+        await this._testNetworkConnection();
+        break;
+
+      case 'save-network-device':
+        await this._saveNetworkDevice();
+        break;
+
+      case 'add-network-command':
+        this._modal = { type: 'add-network-command', deviceId: e.target.dataset.deviceId };
+        this._render();
+        // Add event listeners for checkbox toggles after render
+        setTimeout(() => {
+          const isInputCheckbox = this.shadowRoot.getElementById('command-is-input');
+          const isQueryCheckbox = this.shadowRoot.getElementById('command-is-query');
+          if (isInputCheckbox) {
+            isInputCheckbox.addEventListener('change', (evt) => {
+              this.shadowRoot.getElementById('input-value-group').style.display = evt.target.checked ? 'block' : 'none';
+            });
+          }
+          if (isQueryCheckbox) {
+            isQueryCheckbox.addEventListener('change', (evt) => {
+              this.shadowRoot.getElementById('response-pattern-group').style.display = evt.target.checked ? 'block' : 'none';
+              this.shadowRoot.getElementById('state-key-group').style.display = evt.target.checked ? 'block' : 'none';
+            });
+          }
+        }, 0);
+        break;
+
+      case 'save-network-command':
+        await this._saveNetworkCommand(e.target.dataset.deviceId);
+        break;
+
+      case 'send-network-command':
+        await this._sendNetworkCommand(e.target.dataset.deviceId, e.target.dataset.commandId);
+        break;
+
+      case 'delete-network-command':
+        if (confirm('Delete this command?')) {
+          await this._deleteNetworkCommand(e.target.dataset.deviceId, e.target.dataset.commandId);
+        }
+        break;
+
+      case 'test-network-device':
+        await this._testNetworkDevice(e.target.dataset.deviceId);
+        break;
+
+      // Serial device actions
+      case 'create-serial-device':
+        this._modal = { type: 'create-serial-device' };
+        await this._loadAvailableSerialPorts();
+        this._render();
+        // Add mode change listener after render
+        setTimeout(() => {
+          const modeSelect = this.shadowRoot.getElementById('serial-device-mode');
+          if (modeSelect) {
+            modeSelect.addEventListener('change', (evt) => {
+              const directFields = this.shadowRoot.getElementById('serial-direct-fields');
+              const bridgeFields = this.shadowRoot.getElementById('serial-bridge-fields');
+              if (evt.target.value === 'direct') {
+                directFields.style.display = 'block';
+                bridgeFields.style.display = 'none';
+              } else {
+                directFields.style.display = 'none';
+                bridgeFields.style.display = 'block';
+              }
+            });
+          }
+        }, 0);
+        break;
+
+      case 'select-serial-device':
+        this._selectedSerialDevice = e.target.closest('[data-device-id]').dataset.deviceId;
+        const serialDetails = await this._loadSerialDevice(this._selectedSerialDevice);
+        if (serialDetails) {
+          const idx = this._serialDevices.findIndex(d => d.device_id === this._selectedSerialDevice);
+          if (idx >= 0) {
+            this._serialDevices[idx] = { ...this._serialDevices[idx], commands: serialDetails.commands };
+          }
+        }
+        this._render();
+        break;
+
+      case 'edit-serial-device':
+        this._selectedSerialDevice = e.target.dataset.deviceId;
+        const serialDet = await this._loadSerialDevice(this._selectedSerialDevice);
+        if (serialDet) {
+          const index = this._serialDevices.findIndex(d => d.device_id === this._selectedSerialDevice);
+          if (index >= 0) {
+            this._serialDevices[index] = { ...this._serialDevices[index], commands: serialDet.commands };
+          }
+        }
+        this._render();
+        break;
+
+      case 'delete-serial-device':
+        if (confirm('Are you sure you want to delete this serial device?')) {
+          await this._deleteSerialDevice(e.target.dataset.deviceId);
+        }
+        break;
+
+      case 'save-serial-device':
+        await this._saveSerialDevice();
+        break;
+
+      case 'add-serial-command':
+        this._modal = { type: 'add-serial-command', deviceId: e.target.dataset.deviceId };
+        this._render();
+        // Add checkbox listeners after render
+        setTimeout(() => {
+          const isInputCheckbox = this.shadowRoot.getElementById('serial-command-is-input');
+          const isQueryCheckbox = this.shadowRoot.getElementById('serial-command-is-query');
+          if (isInputCheckbox) {
+            isInputCheckbox.addEventListener('change', (evt) => {
+              this.shadowRoot.getElementById('serial-input-value-group').style.display = evt.target.checked ? 'block' : 'none';
+            });
+          }
+          if (isQueryCheckbox) {
+            isQueryCheckbox.addEventListener('change', (evt) => {
+              this.shadowRoot.getElementById('serial-response-pattern-group').style.display = evt.target.checked ? 'block' : 'none';
+              this.shadowRoot.getElementById('serial-state-key-group').style.display = evt.target.checked ? 'block' : 'none';
+            });
+          }
+        }, 0);
+        break;
+
+      case 'save-serial-command':
+        await this._saveSerialCommand(e.target.dataset.deviceId);
+        break;
+
+      case 'send-serial-command':
+        await this._sendSerialCommand(e.target.dataset.deviceId, e.target.dataset.commandId);
+        break;
+
+      case 'delete-serial-command':
+        if (confirm('Delete this command?')) {
+          await this._deleteSerialCommand(e.target.dataset.deviceId, e.target.dataset.commandId);
+        }
+        break;
+
+      case 'test-serial-device':
+        await this._testSerialDevice(e.target.dataset.deviceId);
         break;
     }
   }
@@ -1838,6 +2718,541 @@ class VDAIRControlCard extends HTMLElement {
     } catch (e) {
       console.error('Failed to send command:', e);
       alert(`Failed to send ${command}`);
+    }
+  }
+
+  // ========== Network Device Methods ==========
+
+  async _testNetworkConnection() {
+    const host = this.shadowRoot.getElementById('network-device-host').value;
+    const port = parseInt(this.shadowRoot.getElementById('network-device-port').value);
+    const protocol = this.shadowRoot.getElementById('network-device-protocol').value;
+    const resultSpan = this.shadowRoot.getElementById('test-connection-result');
+
+    if (!host || !port) {
+      resultSpan.textContent = 'Enter host and port first';
+      resultSpan.style.color = 'var(--error-color, #f44336)';
+      return;
+    }
+
+    resultSpan.textContent = 'Testing...';
+    resultSpan.style.color = 'var(--secondary-text-color)';
+
+    try {
+      const resp = await fetch('/api/vda_ir_control/test_connection', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this._hass.auth.data.access_token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ host, port, protocol }),
+      });
+      const result = await resp.json();
+      resultSpan.textContent = result.success ? 'Connected!' : result.message;
+      resultSpan.style.color = result.success ? 'var(--success-color, #4caf50)' : 'var(--error-color, #f44336)';
+    } catch (e) {
+      resultSpan.textContent = 'Test failed: ' + e.message;
+      resultSpan.style.color = 'var(--error-color, #f44336)';
+    }
+  }
+
+  async _saveNetworkDevice() {
+    const deviceId = this.shadowRoot.getElementById('network-device-id').value.trim();
+    const name = this.shadowRoot.getElementById('network-device-name').value.trim();
+    const host = this.shadowRoot.getElementById('network-device-host').value.trim();
+    const port = parseInt(this.shadowRoot.getElementById('network-device-port').value);
+    const protocol = this.shadowRoot.getElementById('network-device-protocol').value;
+    const deviceType = this.shadowRoot.getElementById('network-device-type').value;
+    const location = this.shadowRoot.getElementById('network-device-location').value.trim();
+
+    if (!deviceId || !name || !host || !port) {
+      alert('Please fill in all required fields');
+      return;
+    }
+
+    try {
+      const resp = await fetch('/api/vda_ir_control/network_devices', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this._hass.auth.data.access_token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          device_id: deviceId,
+          name,
+          host,
+          port,
+          protocol,
+          device_type: deviceType,
+          location,
+        }),
+      });
+
+      if (resp.ok) {
+        this._modal = null;
+        await this._loadNetworkDevices();
+        this._render();
+      } else {
+        const error = await resp.json();
+        alert('Failed to create device: ' + (error.error || 'Unknown error'));
+      }
+    } catch (e) {
+      console.error('Failed to create network device:', e);
+      alert('Failed to create device');
+    }
+  }
+
+  async _deleteNetworkDevice(deviceId) {
+    try {
+      const resp = await fetch(`/api/vda_ir_control/network_devices/${deviceId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${this._hass.auth.data.access_token}`,
+        },
+      });
+
+      if (resp.ok) {
+        if (this._selectedNetworkDevice === deviceId) {
+          this._selectedNetworkDevice = null;
+        }
+        await this._loadNetworkDevices();
+        this._render();
+      } else {
+        alert('Failed to delete device');
+      }
+    } catch (e) {
+      console.error('Failed to delete network device:', e);
+      alert('Failed to delete device');
+    }
+  }
+
+  async _saveNetworkCommand(deviceId) {
+    const commandId = this.shadowRoot.getElementById('command-id').value.trim();
+    const name = this.shadowRoot.getElementById('command-name').value.trim();
+    const payload = this.shadowRoot.getElementById('command-payload').value;
+    const format = this.shadowRoot.getElementById('command-format').value;
+    const lineEnding = this.shadowRoot.getElementById('command-line-ending').value;
+    const isInput = this.shadowRoot.getElementById('command-is-input').checked;
+    const inputValue = this.shadowRoot.getElementById('command-input-value')?.value || '';
+    const isQuery = this.shadowRoot.getElementById('command-is-query').checked;
+    const responsePattern = this.shadowRoot.getElementById('command-response-pattern')?.value || '';
+    const stateKey = this.shadowRoot.getElementById('command-state-key')?.value || '';
+
+    if (!commandId || !name || !payload) {
+      alert('Please fill in command ID, name, and payload');
+      return;
+    }
+
+    try {
+      const resp = await fetch(`/api/vda_ir_control/network_devices/${deviceId}/commands`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this._hass.auth.data.access_token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          command_id: commandId,
+          name,
+          payload,
+          format,
+          line_ending: lineEnding,
+          is_input_option: isInput,
+          input_value: inputValue,
+          is_query: isQuery,
+          response_pattern: responsePattern,
+          response_state_key: stateKey,
+        }),
+      });
+
+      if (resp.ok) {
+        this._modal = null;
+        // Reload device details
+        const details = await this._loadNetworkDevice(deviceId);
+        if (details) {
+          const index = this._networkDevices.findIndex(d => d.device_id === deviceId);
+          if (index >= 0) {
+            this._networkDevices[index] = { ...this._networkDevices[index], commands: details.commands };
+          }
+        }
+        this._render();
+      } else {
+        const error = await resp.json();
+        alert('Failed to add command: ' + (error.error || 'Unknown error'));
+      }
+    } catch (e) {
+      console.error('Failed to add command:', e);
+      alert('Failed to add command');
+    }
+  }
+
+  async _deleteNetworkCommand(deviceId, commandId) {
+    try {
+      const resp = await fetch(`/api/vda_ir_control/network_devices/${deviceId}/commands/${commandId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${this._hass.auth.data.access_token}`,
+        },
+      });
+
+      if (resp.ok) {
+        // Reload device details
+        const details = await this._loadNetworkDevice(deviceId);
+        if (details) {
+          const index = this._networkDevices.findIndex(d => d.device_id === deviceId);
+          if (index >= 0) {
+            this._networkDevices[index] = { ...this._networkDevices[index], commands: details.commands };
+          }
+        }
+        this._render();
+      } else {
+        alert('Failed to delete command');
+      }
+    } catch (e) {
+      console.error('Failed to delete command:', e);
+      alert('Failed to delete command');
+    }
+  }
+
+  async _sendNetworkCommand(deviceId, commandId) {
+    this._networkTestResult = null;
+    this._render();
+
+    try {
+      const resp = await fetch(`/api/vda_ir_control/network_devices/${deviceId}/send`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this._hass.auth.data.access_token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          command_id: commandId,
+          wait_for_response: true,
+          timeout: 2.0,
+        }),
+      });
+
+      const result = await resp.json();
+      this._networkTestResult = {
+        success: result.success,
+        response: result.response,
+        message: result.error || null,
+      };
+      this._render();
+
+      // Clear result after 5 seconds
+      setTimeout(() => {
+        this._networkTestResult = null;
+        this._render();
+      }, 5000);
+    } catch (e) {
+      console.error('Failed to send command:', e);
+      this._networkTestResult = {
+        success: false,
+        message: 'Failed to send command: ' + e.message,
+      };
+      this._render();
+    }
+  }
+
+  async _testNetworkDevice(deviceId) {
+    this._networkTestResult = { success: true, message: 'Checking connection...' };
+    this._render();
+
+    try {
+      const device = this._networkDevices.find(d => d.device_id === deviceId);
+      if (!device) return;
+
+      const resp = await fetch('/api/vda_ir_control/test_connection', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this._hass.auth.data.access_token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          host: device.host,
+          port: device.port,
+          protocol: device.protocol,
+        }),
+      });
+
+      const result = await resp.json();
+      this._networkTestResult = result;
+      this._render();
+
+      // Clear result after 5 seconds
+      setTimeout(() => {
+        this._networkTestResult = null;
+        this._render();
+      }, 5000);
+    } catch (e) {
+      console.error('Failed to test device:', e);
+      this._networkTestResult = {
+        success: false,
+        message: 'Test failed: ' + e.message,
+      };
+      this._render();
+    }
+  }
+
+  // ========== Serial Device Methods ==========
+
+  async _saveSerialDevice() {
+    const deviceId = this.shadowRoot.getElementById('serial-device-id').value.trim();
+    const name = this.shadowRoot.getElementById('serial-device-name').value.trim();
+    const mode = this.shadowRoot.getElementById('serial-device-mode').value;
+    const deviceType = this.shadowRoot.getElementById('serial-device-type').value;
+    const location = this.shadowRoot.getElementById('serial-device-location').value.trim();
+    const baudRate = parseInt(this.shadowRoot.getElementById('serial-device-baud').value);
+    const dataBits = parseInt(this.shadowRoot.getElementById('serial-device-data-bits').value);
+    const parity = this.shadowRoot.getElementById('serial-device-parity').value;
+    const stopBits = parseInt(this.shadowRoot.getElementById('serial-device-stop-bits').value);
+
+    if (!deviceId || !name) {
+      alert('Please fill in Device ID and Name');
+      return;
+    }
+
+    const deviceData = {
+      device_id: deviceId,
+      name,
+      mode,
+      device_type: deviceType,
+      location,
+      baud_rate: baudRate,
+      data_bits: dataBits,
+      parity,
+      stop_bits: stopBits,
+    };
+
+    if (mode === 'direct') {
+      const portSelect = this.shadowRoot.getElementById('serial-device-port').value;
+      const portManual = this.shadowRoot.getElementById('serial-device-port-manual').value.trim();
+      deviceData.port = portManual || portSelect;
+      if (!deviceData.port) {
+        alert('Please enter or select a serial port');
+        return;
+      }
+    } else {
+      deviceData.board_id = this.shadowRoot.getElementById('serial-device-board').value;
+      deviceData.uart_num = parseInt(this.shadowRoot.getElementById('serial-device-uart').value);
+      deviceData.rx_pin = parseInt(this.shadowRoot.getElementById('serial-device-rx-pin').value);
+      deviceData.tx_pin = parseInt(this.shadowRoot.getElementById('serial-device-tx-pin').value);
+      if (!deviceData.board_id) {
+        alert('Please select an ESP32 board');
+        return;
+      }
+    }
+
+    try {
+      const resp = await fetch('/api/vda_ir_control/serial_devices', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this._hass.auth.data.access_token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(deviceData),
+      });
+
+      if (resp.ok) {
+        this._modal = null;
+        await this._loadSerialDevices();
+        this._render();
+      } else {
+        const error = await resp.json();
+        alert('Failed to create device: ' + (error.error || 'Unknown error'));
+      }
+    } catch (e) {
+      console.error('Failed to create serial device:', e);
+      alert('Failed to create device');
+    }
+  }
+
+  async _deleteSerialDevice(deviceId) {
+    try {
+      const resp = await fetch(`/api/vda_ir_control/serial_devices/${deviceId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${this._hass.auth.data.access_token}`,
+        },
+      });
+
+      if (resp.ok) {
+        if (this._selectedSerialDevice === deviceId) {
+          this._selectedSerialDevice = null;
+        }
+        await this._loadSerialDevices();
+        this._render();
+      } else {
+        alert('Failed to delete device');
+      }
+    } catch (e) {
+      console.error('Failed to delete serial device:', e);
+      alert('Failed to delete device');
+    }
+  }
+
+  async _saveSerialCommand(deviceId) {
+    const commandId = this.shadowRoot.getElementById('serial-command-id').value.trim();
+    const name = this.shadowRoot.getElementById('serial-command-name').value.trim();
+    const payload = this.shadowRoot.getElementById('serial-command-payload').value;
+    const format = this.shadowRoot.getElementById('serial-command-format').value;
+    const lineEnding = this.shadowRoot.getElementById('serial-command-line-ending').value;
+    const isInput = this.shadowRoot.getElementById('serial-command-is-input').checked;
+    const inputValue = this.shadowRoot.getElementById('serial-command-input-value')?.value || '';
+    const isQuery = this.shadowRoot.getElementById('serial-command-is-query').checked;
+    const responsePattern = this.shadowRoot.getElementById('serial-command-response-pattern')?.value || '';
+    const stateKey = this.shadowRoot.getElementById('serial-command-state-key')?.value || '';
+
+    if (!commandId || !name || !payload) {
+      alert('Please fill in command ID, name, and payload');
+      return;
+    }
+
+    try {
+      const resp = await fetch(`/api/vda_ir_control/serial_devices/${deviceId}/commands`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this._hass.auth.data.access_token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          command_id: commandId,
+          name,
+          payload,
+          format,
+          line_ending: lineEnding,
+          is_input_option: isInput,
+          input_value: inputValue,
+          is_query: isQuery,
+          response_pattern: responsePattern,
+          response_state_key: stateKey,
+        }),
+      });
+
+      if (resp.ok) {
+        this._modal = null;
+        // Reload device details
+        const details = await this._loadSerialDevice(deviceId);
+        if (details) {
+          const index = this._serialDevices.findIndex(d => d.device_id === deviceId);
+          if (index >= 0) {
+            this._serialDevices[index] = { ...this._serialDevices[index], commands: details.commands };
+          }
+        }
+        this._render();
+      } else {
+        const error = await resp.json();
+        alert('Failed to add command: ' + (error.error || 'Unknown error'));
+      }
+    } catch (e) {
+      console.error('Failed to add command:', e);
+      alert('Failed to add command');
+    }
+  }
+
+  async _deleteSerialCommand(deviceId, commandId) {
+    try {
+      const resp = await fetch(`/api/vda_ir_control/serial_devices/${deviceId}/commands/${commandId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${this._hass.auth.data.access_token}`,
+        },
+      });
+
+      if (resp.ok) {
+        // Reload device details
+        const details = await this._loadSerialDevice(deviceId);
+        if (details) {
+          const index = this._serialDevices.findIndex(d => d.device_id === deviceId);
+          if (index >= 0) {
+            this._serialDevices[index] = { ...this._serialDevices[index], commands: details.commands };
+          }
+        }
+        this._render();
+      } else {
+        alert('Failed to delete command');
+      }
+    } catch (e) {
+      console.error('Failed to delete serial command:', e);
+      alert('Failed to delete command');
+    }
+  }
+
+  async _sendSerialCommand(deviceId, commandId) {
+    this._serialTestResult = null;
+    this._render();
+
+    try {
+      const resp = await fetch(`/api/vda_ir_control/serial_devices/${deviceId}/send`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this._hass.auth.data.access_token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          command_id: commandId,
+          wait_for_response: true,
+          timeout: 2.0,
+        }),
+      });
+
+      const result = await resp.json();
+      this._serialTestResult = {
+        success: result.success,
+        response: result.response,
+        message: result.error || null,
+      };
+      this._render();
+
+      // Clear result after 5 seconds
+      setTimeout(() => {
+        this._serialTestResult = null;
+        this._render();
+      }, 5000);
+    } catch (e) {
+      console.error('Failed to send command:', e);
+      this._serialTestResult = {
+        success: false,
+        message: 'Failed to send command: ' + e.message,
+      };
+      this._render();
+    }
+  }
+
+  async _testSerialDevice(deviceId) {
+    this._serialTestResult = { success: true, message: 'Testing connection...' };
+    this._render();
+
+    try {
+      const device = this._serialDevices.find(d => d.device_id === deviceId);
+      if (!device) return;
+
+      // For serial devices, we check the state endpoint
+      const resp = await fetch(`/api/vda_ir_control/serial_devices/${deviceId}/state`, {
+        headers: {
+          'Authorization': `Bearer ${this._hass.auth.data.access_token}`,
+        },
+      });
+
+      const result = await resp.json();
+      this._serialTestResult = {
+        success: result.connected,
+        message: result.connected ? 'Device is connected' : 'Device is not connected',
+      };
+      this._render();
+
+      // Clear result after 5 seconds
+      setTimeout(() => {
+        this._serialTestResult = null;
+        this._render();
+      }, 5000);
+    } catch (e) {
+      console.error('Failed to test device:', e);
+      this._serialTestResult = {
+        success: false,
+        message: 'Test failed: ' + e.message,
+      };
+      this._render();
     }
   }
 

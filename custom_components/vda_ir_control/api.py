@@ -12,6 +12,9 @@ from .storage import get_storage
 from .device_types import (
     get_commands_for_device_type,
     DeviceType,
+    TransportType,
+    CommandFormat,
+    LineEnding,
     ESP32_POE_ISO_PINS,
     ESP32_POE_ISO_RESERVED,
     get_available_ir_pins,
@@ -23,6 +26,18 @@ from .ir_profiles import (
     get_profile_by_id,
     get_available_manufacturers,
     get_available_device_types,
+)
+from .models import NetworkDevice, NetworkConfig, SerialDevice, SerialConfig, DeviceCommand, ResponsePattern
+from .network_coordinator import (
+    get_network_coordinator,
+    async_setup_network_coordinator,
+    async_remove_network_coordinator,
+)
+from .serial_coordinator import (
+    get_serial_coordinator,
+    async_setup_serial_coordinator,
+    async_remove_serial_coordinator,
+    get_available_serial_ports,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -376,8 +391,807 @@ class VDAIRBuiltinProfileView(HomeAssistantView):
         return self.json(profile)
 
 
+# ============================================================================
+# NETWORK DEVICE API ENDPOINTS
+# ============================================================================
+
+
+class VDAIRNetworkDevicesView(HomeAssistantView):
+    """API endpoint for network devices."""
+
+    url = "/api/vda_ir_control/network_devices"
+    name = "api:vda_ir_control:network_devices"
+    requires_auth = True
+
+    async def get(self, request):
+        """Get all network devices."""
+        hass = request.app["hass"]
+        storage = get_storage(hass)
+        devices = await storage.async_get_all_network_devices()
+
+        result = []
+        for device in devices:
+            coordinator = get_network_coordinator(hass, device.device_id)
+            result.append({
+                "device_id": device.device_id,
+                "name": device.name,
+                "device_type": device.device_type.value,
+                "transport_type": device.transport_type.value,
+                "host": device.network_config.host,
+                "port": device.network_config.port,
+                "protocol": device.network_config.protocol,
+                "location": device.location,
+                "connected": coordinator.is_connected if coordinator else False,
+                "command_count": len(device.commands),
+            })
+
+        return self.json({
+            "devices": result,
+            "total": len(result),
+        })
+
+    async def post(self, request):
+        """Create a new network device."""
+        hass = request.app["hass"]
+        storage = get_storage(hass)
+
+        try:
+            data = await request.json()
+        except Exception:
+            return self.json({"error": "Invalid JSON"}, status_code=400)
+
+        # Validate required fields
+        required = ["device_id", "name", "host", "port"]
+        for field in required:
+            if field not in data:
+                return self.json({"error": f"Missing required field: {field}"}, status_code=400)
+
+        network_config = NetworkConfig(
+            host=data["host"],
+            port=data["port"],
+            protocol=data.get("protocol", "tcp"),
+            timeout=data.get("timeout", 5.0),
+            persistent_connection=data.get("persistent_connection", True),
+        )
+
+        transport_type = (
+            TransportType.NETWORK_TCP
+            if network_config.protocol == "tcp"
+            else TransportType.NETWORK_UDP
+        )
+
+        device = NetworkDevice(
+            device_id=data["device_id"],
+            name=data["name"],
+            device_type=DeviceType(data.get("device_type", "custom")),
+            transport_type=transport_type,
+            location=data.get("location", ""),
+            network_config=network_config,
+        )
+
+        await storage.async_save_network_device(device)
+        _LOGGER.info("Created network device: %s", device.device_id)
+
+        # Setup coordinator
+        try:
+            coordinator = await async_setup_network_coordinator(hass, device)
+            connected = coordinator.is_connected
+        except Exception as err:
+            _LOGGER.warning("Failed to connect to network device %s: %s", device.device_id, err)
+            connected = False
+
+        return self.json({
+            "success": True,
+            "device_id": device.device_id,
+            "connected": connected,
+        })
+
+
+class VDAIRNetworkDeviceView(HomeAssistantView):
+    """API endpoint for a single network device."""
+
+    url = "/api/vda_ir_control/network_devices/{device_id}"
+    name = "api:vda_ir_control:network_device"
+    requires_auth = True
+
+    async def get(self, request, device_id):
+        """Get a single network device."""
+        hass = request.app["hass"]
+        storage = get_storage(hass)
+        device = await storage.async_get_network_device(device_id)
+
+        if device is None:
+            return self.json({"error": "Device not found"}, status_code=404)
+
+        coordinator = get_network_coordinator(hass, device.device_id)
+
+        return self.json({
+            "device_id": device.device_id,
+            "name": device.name,
+            "device_type": device.device_type.value,
+            "transport_type": device.transport_type.value,
+            "location": device.location,
+            "network_config": device.network_config.to_dict(),
+            "commands": {k: v.to_dict() for k, v in device.commands.items()},
+            "global_response_patterns": [p.to_dict() for p in device.global_response_patterns],
+            "connected": coordinator.is_connected if coordinator else False,
+            "device_state": coordinator.device_state.to_dict() if coordinator else None,
+        })
+
+    async def delete(self, request, device_id):
+        """Delete a network device."""
+        hass = request.app["hass"]
+        storage = get_storage(hass)
+
+        # Check device exists
+        device = await storage.async_get_network_device(device_id)
+        if device is None:
+            return self.json({"error": "Device not found"}, status_code=404)
+
+        # Disconnect and remove coordinator
+        await async_remove_network_coordinator(hass, device_id)
+
+        # Delete from storage
+        await storage.async_delete_network_device(device_id)
+        _LOGGER.info("Deleted network device: %s", device_id)
+
+        return self.json({"success": True})
+
+
+class VDAIRNetworkDeviceCommandsView(HomeAssistantView):
+    """API endpoint for network device commands."""
+
+    url = "/api/vda_ir_control/network_devices/{device_id}/commands"
+    name = "api:vda_ir_control:network_device_commands"
+    requires_auth = True
+
+    async def get(self, request, device_id):
+        """Get all commands for a network device."""
+        hass = request.app["hass"]
+        storage = get_storage(hass)
+        device = await storage.async_get_network_device(device_id)
+
+        if device is None:
+            return self.json({"error": "Device not found"}, status_code=404)
+
+        return self.json({
+            "device_id": device_id,
+            "commands": {k: v.to_dict() for k, v in device.commands.items()},
+            "total": len(device.commands),
+        })
+
+    async def post(self, request, device_id):
+        """Add a command to a network device."""
+        hass = request.app["hass"]
+        storage = get_storage(hass)
+
+        device = await storage.async_get_network_device(device_id)
+        if device is None:
+            return self.json({"error": "Device not found"}, status_code=404)
+
+        try:
+            data = await request.json()
+        except Exception:
+            return self.json({"error": "Invalid JSON"}, status_code=400)
+
+        # Validate required fields
+        required = ["command_id", "name", "payload"]
+        for field in required:
+            if field not in data:
+                return self.json({"error": f"Missing required field: {field}"}, status_code=400)
+
+        # Build response patterns if provided
+        response_patterns = []
+        if data.get("response_pattern") and data.get("response_state_key"):
+            response_patterns.append(ResponsePattern(
+                pattern=data["response_pattern"],
+                state_key=data["response_state_key"],
+                value_group=data.get("value_group", 1),
+                value_map=data.get("value_map", {}),
+            ))
+
+        command = DeviceCommand(
+            command_id=data["command_id"],
+            name=data["name"],
+            format=CommandFormat(data.get("format", "text")),
+            payload=data["payload"],
+            line_ending=LineEnding(data.get("line_ending", "none")),
+            is_input_option=data.get("is_input_option", False),
+            input_value=data.get("input_value", ""),
+            is_query=data.get("is_query", False),
+            response_patterns=response_patterns,
+            poll_interval=data.get("poll_interval", 0.0),
+        )
+
+        await storage.async_add_command_to_network_device(device_id, command)
+        _LOGGER.info("Added command %s to network device %s", command.command_id, device_id)
+
+        return self.json({"success": True, "command_id": command.command_id})
+
+
+class VDAIRNetworkDeviceCommandView(HomeAssistantView):
+    """API endpoint for a single network device command."""
+
+    url = "/api/vda_ir_control/network_devices/{device_id}/commands/{command_id}"
+    name = "api:vda_ir_control:network_device_command"
+    requires_auth = True
+
+    async def delete(self, request, device_id, command_id):
+        """Delete a command from a network device."""
+        hass = request.app["hass"]
+        storage = get_storage(hass)
+
+        success = await storage.async_delete_command_from_network_device(device_id, command_id)
+        if not success:
+            return self.json({"error": "Command not found"}, status_code=404)
+
+        return self.json({"success": True})
+
+
+class VDAIRNetworkDeviceSendView(HomeAssistantView):
+    """API endpoint for sending commands to network devices."""
+
+    url = "/api/vda_ir_control/network_devices/{device_id}/send"
+    name = "api:vda_ir_control:network_device_send"
+    requires_auth = True
+
+    async def post(self, request, device_id):
+        """Send a command to a network device."""
+        hass = request.app["hass"]
+        storage = get_storage(hass)
+
+        try:
+            data = await request.json()
+        except Exception:
+            return self.json({"error": "Invalid JSON"}, status_code=400)
+
+        # Get or setup coordinator
+        coordinator = get_network_coordinator(hass, device_id)
+        if coordinator is None:
+            device = await storage.async_get_network_device(device_id)
+            if device is None:
+                return self.json({"error": "Device not found"}, status_code=404)
+            coordinator = await async_setup_network_coordinator(hass, device)
+
+        wait_for_response = data.get("wait_for_response", False)
+        timeout = data.get("timeout", 2.0)
+
+        # Check if sending a named command or raw payload
+        if "command_id" in data:
+            command = coordinator.device.get_command(data["command_id"])
+            if command is None:
+                return self.json({"error": "Command not found"}, status_code=404)
+
+            try:
+                response = await coordinator.async_send_command(command, wait_for_response, timeout)
+                return self.json({
+                    "success": True,
+                    "command_id": data["command_id"],
+                    "response": response,
+                })
+            except Exception as err:
+                return self.json({"error": str(err)}, status_code=500)
+
+        elif "payload" in data:
+            # Send raw command
+            try:
+                response = await coordinator.async_send_raw(
+                    data["payload"],
+                    data.get("format", "text"),
+                    data.get("line_ending", "none"),
+                    wait_for_response,
+                    timeout,
+                )
+                return self.json({
+                    "success": True,
+                    "response": response,
+                })
+            except Exception as err:
+                return self.json({"error": str(err)}, status_code=500)
+
+        else:
+            return self.json({"error": "Must provide command_id or payload"}, status_code=400)
+
+
+class VDAIRNetworkDeviceStateView(HomeAssistantView):
+    """API endpoint for network device state."""
+
+    url = "/api/vda_ir_control/network_devices/{device_id}/state"
+    name = "api:vda_ir_control:network_device_state"
+    requires_auth = True
+
+    async def get(self, request, device_id):
+        """Get current state of a network device."""
+        hass = request.app["hass"]
+
+        coordinator = get_network_coordinator(hass, device_id)
+        if coordinator is None:
+            return self.json({"error": "Device not connected"}, status_code=404)
+
+        return self.json({
+            "device_id": device_id,
+            "connected": coordinator.is_connected,
+            "state": coordinator.device_state.to_dict(),
+        })
+
+
+class VDAIRTestConnectionView(HomeAssistantView):
+    """API endpoint for testing network connections."""
+
+    url = "/api/vda_ir_control/test_connection"
+    name = "api:vda_ir_control:test_connection"
+    requires_auth = True
+
+    async def post(self, request):
+        """Test a network connection."""
+        import asyncio
+
+        try:
+            data = await request.json()
+        except Exception:
+            return self.json({"error": "Invalid JSON"}, status_code=400)
+
+        required = ["host", "port"]
+        for field in required:
+            if field not in data:
+                return self.json({"error": f"Missing required field: {field}"}, status_code=400)
+
+        host = data["host"]
+        port = data["port"]
+        protocol = data.get("protocol", "tcp")
+        timeout = data.get("timeout", 5.0)
+
+        try:
+            if protocol == "tcp":
+                reader, writer = await asyncio.wait_for(
+                    asyncio.open_connection(host, port),
+                    timeout=timeout,
+                )
+                writer.close()
+                await writer.wait_closed()
+                return self.json({
+                    "success": True,
+                    "host": host,
+                    "port": port,
+                    "protocol": protocol,
+                    "message": "TCP connection successful",
+                })
+            else:
+                loop = asyncio.get_event_loop()
+                transport, _ = await loop.create_datagram_endpoint(
+                    asyncio.DatagramProtocol,
+                    remote_addr=(host, port),
+                )
+                transport.close()
+                return self.json({
+                    "success": True,
+                    "host": host,
+                    "port": port,
+                    "protocol": protocol,
+                    "message": "UDP endpoint created successfully",
+                })
+        except asyncio.TimeoutError:
+            return self.json({
+                "success": False,
+                "host": host,
+                "port": port,
+                "protocol": protocol,
+                "message": f"Connection timeout after {timeout}s",
+            })
+        except OSError as err:
+            return self.json({
+                "success": False,
+                "host": host,
+                "port": port,
+                "protocol": protocol,
+                "message": f"Connection failed: {err}",
+            })
+
+
+# ============================================================================
+# SERIAL DEVICE API ENDPOINTS
+# ============================================================================
+
+
+class VDAIRSerialPortsView(HomeAssistantView):
+    """API endpoint for listing available serial ports."""
+
+    url = "/api/vda_ir_control/serial_ports"
+    name = "api:vda_ir_control:serial_ports"
+    requires_auth = True
+
+    async def get(self, request):
+        """Get available serial ports on the system."""
+        ports = await get_available_serial_ports()
+        return self.json({
+            "ports": ports,
+            "total": len(ports),
+        })
+
+
+class VDAIRSerialDevicesView(HomeAssistantView):
+    """API endpoint for serial devices."""
+
+    url = "/api/vda_ir_control/serial_devices"
+    name = "api:vda_ir_control:serial_devices"
+    requires_auth = True
+
+    async def get(self, request):
+        """Get all serial devices."""
+        hass = request.app["hass"]
+        storage = get_storage(hass)
+        devices = await storage.async_get_all_serial_devices()
+
+        result = []
+        for device in devices:
+            coordinator = get_serial_coordinator(hass, device.device_id)
+            result.append({
+                "device_id": device.device_id,
+                "name": device.name,
+                "device_type": device.device_type.value,
+                "transport_type": device.transport_type.value,
+                "port": device.serial_config.port,
+                "baud_rate": device.serial_config.baud_rate,
+                "bridge_board_id": device.bridge_board_id,
+                "location": device.location,
+                "connected": coordinator.is_connected if coordinator else False,
+                "command_count": len(device.commands),
+            })
+
+        return self.json({
+            "devices": result,
+            "total": len(result),
+        })
+
+    async def post(self, request):
+        """Create a new serial device."""
+        hass = request.app["hass"]
+        storage = get_storage(hass)
+
+        try:
+            data = await request.json()
+        except Exception:
+            return self.json({"error": "Invalid JSON"}, status_code=400)
+
+        # Validate required fields
+        required = ["device_id", "name"]
+        for field in required:
+            if field not in data:
+                return self.json({"error": f"Missing required field: {field}"}, status_code=400)
+
+        # Must have either port (direct) or bridge_board_id (bridge mode)
+        if not data.get("port") and not data.get("bridge_board_id"):
+            return self.json({"error": "Must provide either 'port' or 'bridge_board_id'"}, status_code=400)
+
+        # Determine transport type
+        bridge_board_id = data.get("bridge_board_id", "")
+        if bridge_board_id:
+            transport_type = TransportType.SERIAL_BRIDGE
+        else:
+            transport_type = TransportType.SERIAL_DIRECT
+
+        serial_config = SerialConfig(
+            port=data.get("port", ""),
+            baud_rate=data.get("baud_rate", 115200),
+            data_bits=data.get("data_bits", 8),
+            stop_bits=data.get("stop_bits", 1),
+            parity=data.get("parity", "N"),
+            uart_number=data.get("uart_number", 1),
+            rx_pin=data.get("rx_pin", 16),
+            tx_pin=data.get("tx_pin", 17),
+        )
+
+        device = SerialDevice(
+            device_id=data["device_id"],
+            name=data["name"],
+            device_type=DeviceType(data.get("device_type", "custom")),
+            transport_type=transport_type,
+            location=data.get("location", ""),
+            serial_config=serial_config,
+            bridge_board_id=bridge_board_id,
+        )
+
+        await storage.async_save_serial_device(device)
+        _LOGGER.info("Created serial device: %s", device.device_id)
+
+        # Setup coordinator
+        try:
+            coordinator = await async_setup_serial_coordinator(hass, device)
+            connected = coordinator.is_connected
+        except Exception as err:
+            _LOGGER.warning("Failed to connect to serial device %s: %s", device.device_id, err)
+            connected = False
+
+        return self.json({
+            "success": True,
+            "device_id": device.device_id,
+            "connected": connected,
+        })
+
+
+class VDAIRSerialDeviceView(HomeAssistantView):
+    """API endpoint for a single serial device."""
+
+    url = "/api/vda_ir_control/serial_devices/{device_id}"
+    name = "api:vda_ir_control:serial_device"
+    requires_auth = True
+
+    async def get(self, request, device_id):
+        """Get a single serial device."""
+        hass = request.app["hass"]
+        storage = get_storage(hass)
+        device = await storage.async_get_serial_device(device_id)
+
+        if device is None:
+            return self.json({"error": "Device not found"}, status_code=404)
+
+        coordinator = get_serial_coordinator(hass, device.device_id)
+
+        return self.json({
+            "device_id": device.device_id,
+            "name": device.name,
+            "device_type": device.device_type.value,
+            "transport_type": device.transport_type.value,
+            "location": device.location,
+            "serial_config": device.serial_config.to_dict(),
+            "bridge_board_id": device.bridge_board_id,
+            "commands": {k: v.to_dict() for k, v in device.commands.items()},
+            "global_response_patterns": [p.to_dict() for p in device.global_response_patterns],
+            "connected": coordinator.is_connected if coordinator else False,
+            "device_state": coordinator.device_state.to_dict() if coordinator else None,
+        })
+
+    async def delete(self, request, device_id):
+        """Delete a serial device."""
+        hass = request.app["hass"]
+        storage = get_storage(hass)
+
+        # Check device exists
+        device = await storage.async_get_serial_device(device_id)
+        if device is None:
+            return self.json({"error": "Device not found"}, status_code=404)
+
+        # Disconnect and remove coordinator
+        await async_remove_serial_coordinator(hass, device_id)
+
+        # Delete from storage
+        await storage.async_delete_serial_device(device_id)
+        _LOGGER.info("Deleted serial device: %s", device_id)
+
+        return self.json({"success": True})
+
+
+class VDAIRSerialDeviceCommandsView(HomeAssistantView):
+    """API endpoint for serial device commands."""
+
+    url = "/api/vda_ir_control/serial_devices/{device_id}/commands"
+    name = "api:vda_ir_control:serial_device_commands"
+    requires_auth = True
+
+    async def get(self, request, device_id):
+        """Get all commands for a serial device."""
+        hass = request.app["hass"]
+        storage = get_storage(hass)
+        device = await storage.async_get_serial_device(device_id)
+
+        if device is None:
+            return self.json({"error": "Device not found"}, status_code=404)
+
+        return self.json({
+            "device_id": device_id,
+            "commands": {k: v.to_dict() for k, v in device.commands.items()},
+            "total": len(device.commands),
+        })
+
+    async def post(self, request, device_id):
+        """Add a command to a serial device."""
+        hass = request.app["hass"]
+        storage = get_storage(hass)
+
+        device = await storage.async_get_serial_device(device_id)
+        if device is None:
+            return self.json({"error": "Device not found"}, status_code=404)
+
+        try:
+            data = await request.json()
+        except Exception:
+            return self.json({"error": "Invalid JSON"}, status_code=400)
+
+        # Validate required fields
+        required = ["command_id", "name", "payload"]
+        for field in required:
+            if field not in data:
+                return self.json({"error": f"Missing required field: {field}"}, status_code=400)
+
+        # Build response patterns if provided
+        response_patterns = []
+        if data.get("response_pattern") and data.get("response_state_key"):
+            response_patterns.append(ResponsePattern(
+                pattern=data["response_pattern"],
+                state_key=data["response_state_key"],
+                value_group=data.get("value_group", 1),
+                value_map=data.get("value_map", {}),
+            ))
+
+        command = DeviceCommand(
+            command_id=data["command_id"],
+            name=data["name"],
+            format=CommandFormat(data.get("format", "text")),
+            payload=data["payload"],
+            line_ending=LineEnding(data.get("line_ending", "none")),
+            is_input_option=data.get("is_input_option", False),
+            input_value=data.get("input_value", ""),
+            is_query=data.get("is_query", False),
+            response_patterns=response_patterns,
+            poll_interval=data.get("poll_interval", 0.0),
+        )
+
+        await storage.async_add_command_to_serial_device(device_id, command)
+        _LOGGER.info("Added command %s to serial device %s", command.command_id, device_id)
+
+        return self.json({"success": True, "command_id": command.command_id})
+
+
+class VDAIRSerialDeviceCommandView(HomeAssistantView):
+    """API endpoint for a single serial device command."""
+
+    url = "/api/vda_ir_control/serial_devices/{device_id}/commands/{command_id}"
+    name = "api:vda_ir_control:serial_device_command"
+    requires_auth = True
+
+    async def delete(self, request, device_id, command_id):
+        """Delete a command from a serial device."""
+        hass = request.app["hass"]
+        storage = get_storage(hass)
+
+        success = await storage.async_delete_command_from_serial_device(device_id, command_id)
+        if not success:
+            return self.json({"error": "Command not found"}, status_code=404)
+
+        return self.json({"success": True})
+
+
+class VDAIRSerialDeviceSendView(HomeAssistantView):
+    """API endpoint for sending commands to serial devices."""
+
+    url = "/api/vda_ir_control/serial_devices/{device_id}/send"
+    name = "api:vda_ir_control:serial_device_send"
+    requires_auth = True
+
+    async def post(self, request, device_id):
+        """Send a command to a serial device."""
+        hass = request.app["hass"]
+        storage = get_storage(hass)
+
+        try:
+            data = await request.json()
+        except Exception:
+            return self.json({"error": "Invalid JSON"}, status_code=400)
+
+        # Get or setup coordinator
+        coordinator = get_serial_coordinator(hass, device_id)
+        if coordinator is None:
+            device = await storage.async_get_serial_device(device_id)
+            if device is None:
+                return self.json({"error": "Device not found"}, status_code=404)
+            coordinator = await async_setup_serial_coordinator(hass, device)
+
+        wait_for_response = data.get("wait_for_response", False)
+        timeout = data.get("timeout", 2.0)
+
+        # Check if sending a named command or raw payload
+        if "command_id" in data:
+            command = coordinator.device.get_command(data["command_id"])
+            if command is None:
+                return self.json({"error": "Command not found"}, status_code=404)
+
+            try:
+                response = await coordinator.async_send_command(command, wait_for_response, timeout)
+                return self.json({
+                    "success": True,
+                    "command_id": data["command_id"],
+                    "response": response,
+                })
+            except Exception as err:
+                return self.json({"error": str(err)}, status_code=500)
+
+        elif "payload" in data:
+            # Send raw command
+            try:
+                response = await coordinator.async_send_raw(
+                    data["payload"],
+                    data.get("format", "text"),
+                    data.get("line_ending", "none"),
+                    wait_for_response,
+                    timeout,
+                )
+                return self.json({
+                    "success": True,
+                    "response": response,
+                })
+            except Exception as err:
+                return self.json({"error": str(err)}, status_code=500)
+
+        else:
+            return self.json({"error": "Must provide command_id or payload"}, status_code=400)
+
+
+class VDAIRSerialDeviceStateView(HomeAssistantView):
+    """API endpoint for serial device state."""
+
+    url = "/api/vda_ir_control/serial_devices/{device_id}/state"
+    name = "api:vda_ir_control:serial_device_state"
+    requires_auth = True
+
+    async def get(self, request, device_id):
+        """Get current state of a serial device."""
+        hass = request.app["hass"]
+
+        coordinator = get_serial_coordinator(hass, device_id)
+        if coordinator is None:
+            return self.json({"error": "Device not connected"}, status_code=404)
+
+        return self.json({
+            "device_id": device_id,
+            "connected": coordinator.is_connected,
+            "is_bridge_mode": coordinator.is_bridge_mode,
+            "state": coordinator.device_state.to_dict(),
+        })
+
+
+class VDAIRBoardSerialConfigView(HomeAssistantView):
+    """API endpoint for ESP32 board serial pin configuration info."""
+
+    url = "/api/vda_ir_control/boards/{board_id}/serial_config"
+    name = "api:vda_ir_control:board_serial_config"
+    requires_auth = True
+
+    async def get(self, request, board_id):
+        """Get serial pin configuration for a board."""
+        # Return recommended pins based on board type
+        # Olimex ESP32-POE-ISO: UART1 on GPIO9 (RX) / GPIO10 (TX)
+        # ESP32 DevKit: UART1 on GPIO16 (RX) / GPIO17 (TX) or UART2 on GPIO25/26
+
+        return self.json({
+            "board_id": board_id,
+            "configurations": {
+                "olimex_poe_iso": {
+                    "name": "Olimex ESP32-POE-ISO",
+                    "uart_options": [
+                        {
+                            "uart": 1,
+                            "rx_pin": 9,
+                            "tx_pin": 10,
+                            "notes": "Recommended - UEXT connector compatible",
+                        }
+                    ],
+                },
+                "esp32_devkit": {
+                    "name": "ESP32 DevKit",
+                    "uart_options": [
+                        {
+                            "uart": 1,
+                            "rx_pin": 16,
+                            "tx_pin": 17,
+                            "notes": "UART1 - most common",
+                        },
+                        {
+                            "uart": 2,
+                            "rx_pin": 25,
+                            "tx_pin": 26,
+                            "notes": "UART2 - alternative pins",
+                        },
+                    ],
+                },
+            },
+            "baud_rates": [9600, 19200, 38400, 57600, 115200, 230400],
+            "default_baud": 115200,
+        })
+
+
 async def async_setup_api(hass: HomeAssistant) -> None:
     """Set up the REST API."""
+    # IR device endpoints
     hass.http.register_view(VDAIRBoardsView())
     hass.http.register_view(VDAIRProfilesView())
     hass.http.register_view(VDAIRProfileView())
@@ -389,4 +1203,24 @@ async def async_setup_api(hass: HomeAssistant) -> None:
     hass.http.register_view(VDAIRPortAssignmentsView())
     hass.http.register_view(VDAIRBuiltinProfilesView())
     hass.http.register_view(VDAIRBuiltinProfileView())
+
+    # Network device endpoints
+    hass.http.register_view(VDAIRNetworkDevicesView())
+    hass.http.register_view(VDAIRNetworkDeviceView())
+    hass.http.register_view(VDAIRNetworkDeviceCommandsView())
+    hass.http.register_view(VDAIRNetworkDeviceCommandView())
+    hass.http.register_view(VDAIRNetworkDeviceSendView())
+    hass.http.register_view(VDAIRNetworkDeviceStateView())
+    hass.http.register_view(VDAIRTestConnectionView())
+
+    # Serial device endpoints
+    hass.http.register_view(VDAIRSerialPortsView())
+    hass.http.register_view(VDAIRSerialDevicesView())
+    hass.http.register_view(VDAIRSerialDeviceView())
+    hass.http.register_view(VDAIRSerialDeviceCommandsView())
+    hass.http.register_view(VDAIRSerialDeviceCommandView())
+    hass.http.register_view(VDAIRSerialDeviceSendView())
+    hass.http.register_view(VDAIRSerialDeviceStateView())
+    hass.http.register_view(VDAIRBoardSerialConfigView())
+
     _LOGGER.info("VDA IR Control REST API registered")

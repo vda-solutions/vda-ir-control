@@ -12,6 +12,45 @@ class PortMode(str, Enum):
     DISABLED = "disabled"
 
 
+# Transport types for device communication
+class TransportType(str, Enum):
+    """Transport type for device communication."""
+    IR = "ir"                        # IR via ESP32 board (existing)
+    SERIAL_BRIDGE = "serial_bridge"  # Serial via ESP32 as bridge
+    SERIAL_DIRECT = "serial_direct"  # Serial directly from HA server
+    NETWORK_TCP = "network_tcp"      # TCP socket connection
+    NETWORK_UDP = "network_udp"      # UDP datagram
+
+
+# Command format types
+class CommandFormat(str, Enum):
+    """Command format type."""
+    IR_CODE = "ir_code"    # IR protocol code (existing)
+    TEXT = "text"          # Text string (ASCII)
+    HEX = "hex"            # Hex/binary data (e.g., "A5 01 02 FF")
+
+
+# Line endings for text commands
+class LineEnding(str, Enum):
+    """Line ending for text commands."""
+    NONE = "none"
+    CR = "cr"
+    LF = "lf"
+    CRLF = "crlf"
+    EXCLAMATION = "!"  # For devices like HDMI matrices that use ! as delimiter
+
+    def get_bytes(self) -> bytes:
+        """Get the actual bytes for this line ending."""
+        endings = {
+            "none": b"",
+            "cr": b"\r",
+            "lf": b"\n",
+            "crlf": b"\r\n",
+            "!": b"!",
+        }
+        return endings.get(self.value, b"")
+
+
 class GPIOPin(NamedTuple):
     """GPIO pin definition for ESP32-POE-ISO board."""
     gpio: int
@@ -109,6 +148,11 @@ class DeviceType(str, Enum):
     STREAMING_DEVICE = "streaming_device"
     DVD_BLURAY = "dvd_bluray"
     PROJECTOR = "projector"
+    # New serial/network device types
+    HDMI_MATRIX = "hdmi_matrix"
+    HDMI_SWITCH = "hdmi_switch"
+    AV_PROCESSOR = "av_processor"
+    SERIAL_RELAY = "serial_relay"
     CUSTOM = "custom"
 
 
@@ -316,6 +360,111 @@ DEVICE_COMMANDS: Dict[DeviceType, List[str]] = {
     DeviceType.CUSTOM: [
         # Empty - user defines all commands
     ],
+
+    DeviceType.HDMI_MATRIX: [
+        # Power
+        "power_on",
+        "power_off",
+        "power_toggle",
+        # Input routing (x to y)
+        "input_1",
+        "input_2",
+        "input_3",
+        "input_4",
+        "input_5",
+        "input_6",
+        "input_7",
+        "input_8",
+        # All outputs to input x
+        "all_to_input_1",
+        "all_to_input_2",
+        "all_to_input_3",
+        "all_to_input_4",
+        "all_to_input_5",
+        "all_to_input_6",
+        "all_to_input_7",
+        "all_to_input_8",
+        # Query commands
+        "query_status",
+        "query_routing",
+        "query_power",
+        # System
+        "reboot",
+        "beep_on",
+        "beep_off",
+        "lock_panel",
+        "unlock_panel",
+        # Presets
+        "save_preset_1",
+        "save_preset_2",
+        "save_preset_3",
+        "save_preset_4",
+        "recall_preset_1",
+        "recall_preset_2",
+        "recall_preset_3",
+        "recall_preset_4",
+        # CEC control (pass-through to connected devices)
+        "cec_power_on",
+        "cec_power_off",
+        "cec_volume_up",
+        "cec_volume_down",
+        "cec_mute",
+    ],
+
+    DeviceType.HDMI_SWITCH: [
+        # Power
+        "power_on",
+        "power_off",
+        "power_toggle",
+        # Input selection
+        "input_1",
+        "input_2",
+        "input_3",
+        "input_4",
+        "input_5",
+        # Query
+        "query_status",
+        "query_input",
+    ],
+
+    DeviceType.AV_PROCESSOR: [
+        # Power
+        "power_on",
+        "power_off",
+        "power_toggle",
+        # Volume
+        "volume_up",
+        "volume_down",
+        "mute",
+        "set_volume",
+        # Input selection
+        "input_1",
+        "input_2",
+        "input_3",
+        "input_4",
+        "input_5",
+        "input_6",
+        # Query
+        "query_status",
+        "query_volume",
+        "query_input",
+    ],
+
+    DeviceType.SERIAL_RELAY: [
+        # Relay control
+        "relay_1_on",
+        "relay_1_off",
+        "relay_2_on",
+        "relay_2_off",
+        "relay_3_on",
+        "relay_3_off",
+        "relay_4_on",
+        "relay_4_off",
+        "all_on",
+        "all_off",
+        # Query
+        "query_status",
+    ],
 }
 
 
@@ -412,6 +561,57 @@ COMMAND_LABELS: Dict[str, str] = {
     "focus_far": "Focus Far",
     "freeze": "Freeze",
     "blank": "Blank Screen",
+    # HDMI Matrix/Switch commands
+    "input_1": "Input 1",
+    "input_2": "Input 2",
+    "input_3": "Input 3",
+    "input_4": "Input 4",
+    "input_5": "Input 5",
+    "input_6": "Input 6",
+    "input_7": "Input 7",
+    "input_8": "Input 8",
+    "all_to_input_1": "All Outputs → Input 1",
+    "all_to_input_2": "All Outputs → Input 2",
+    "all_to_input_3": "All Outputs → Input 3",
+    "all_to_input_4": "All Outputs → Input 4",
+    "all_to_input_5": "All Outputs → Input 5",
+    "all_to_input_6": "All Outputs → Input 6",
+    "all_to_input_7": "All Outputs → Input 7",
+    "all_to_input_8": "All Outputs → Input 8",
+    "query_status": "Query Status",
+    "query_routing": "Query Routing",
+    "query_power": "Query Power",
+    "query_input": "Query Input",
+    "query_volume": "Query Volume",
+    "beep_on": "Beep On",
+    "beep_off": "Beep Off",
+    "lock_panel": "Lock Front Panel",
+    "unlock_panel": "Unlock Front Panel",
+    "save_preset_1": "Save Preset 1",
+    "save_preset_2": "Save Preset 2",
+    "save_preset_3": "Save Preset 3",
+    "save_preset_4": "Save Preset 4",
+    "recall_preset_1": "Recall Preset 1",
+    "recall_preset_2": "Recall Preset 2",
+    "recall_preset_3": "Recall Preset 3",
+    "recall_preset_4": "Recall Preset 4",
+    "cec_power_on": "CEC Power On",
+    "cec_power_off": "CEC Power Off",
+    "cec_volume_up": "CEC Volume Up",
+    "cec_volume_down": "CEC Volume Down",
+    "cec_mute": "CEC Mute",
+    # Relay commands
+    "relay_1_on": "Relay 1 On",
+    "relay_1_off": "Relay 1 Off",
+    "relay_2_on": "Relay 2 On",
+    "relay_2_off": "Relay 2 Off",
+    "relay_3_on": "Relay 3 On",
+    "relay_3_off": "Relay 3 Off",
+    "relay_4_on": "Relay 4 On",
+    "relay_4_off": "Relay 4 Off",
+    "all_on": "All On",
+    "all_off": "All Off",
+    "set_volume": "Set Volume",
 }
 
 
@@ -423,6 +623,10 @@ DEVICE_TYPE_LABELS: Dict[DeviceType, str] = {
     DeviceType.STREAMING_DEVICE: "Streaming Device (Roku, Fire TV, etc.)",
     DeviceType.DVD_BLURAY: "DVD/Blu-ray Player",
     DeviceType.PROJECTOR: "Projector",
+    DeviceType.HDMI_MATRIX: "HDMI Matrix",
+    DeviceType.HDMI_SWITCH: "HDMI Switch",
+    DeviceType.AV_PROCESSOR: "AV Processor",
+    DeviceType.SERIAL_RELAY: "Serial Relay Controller",
     DeviceType.CUSTOM: "Custom Device",
 }
 

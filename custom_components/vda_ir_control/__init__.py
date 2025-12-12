@@ -15,14 +15,17 @@ from .const import DOMAIN
 from .coordinator import VDAIRBoardCoordinator
 from .services import async_setup_services
 from .api import async_setup_api
+from .storage import get_storage
+from .network_coordinator import async_setup_network_coordinator
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
-PLATFORMS: Final = [Platform.SWITCH]
+PLATFORMS: Final = [Platform.SWITCH, Platform.BUTTON, Platform.SELECT]
 
 # Frontend paths
 FRONTEND_DIR = Path(__file__).parent / "frontend"
-CARD_URL = f"/{DOMAIN}/vda-ir-control-card.js"
+ADMIN_CARD_URL = f"/{DOMAIN}/vda-ir-control-card.js"
+REMOTE_CARD_URL = f"/{DOMAIN}/vda-ir-remote-card.js"
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
@@ -38,7 +41,27 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     # Register frontend resources
     await _async_register_frontend(hass)
 
+    # Initialize network device coordinators
+    await _async_setup_network_devices(hass)
+
     return True
+
+
+async def _async_setup_network_devices(hass: HomeAssistant) -> None:
+    """Set up coordinators for all saved network devices."""
+    storage = get_storage(hass)
+    network_devices = await storage.async_get_all_network_devices()
+
+    for device in network_devices:
+        try:
+            await async_setup_network_coordinator(hass, device)
+            _LOGGER.info("Set up network device coordinator: %s", device.name)
+        except Exception as err:
+            _LOGGER.warning(
+                "Failed to connect to network device %s: %s",
+                device.name,
+                err,
+            )
 
 
 async def _async_register_frontend(hass: HomeAssistant) -> None:
@@ -52,11 +75,14 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
         )
     ])
 
-    # Register the card as a Lovelace resource
-    # Users need to add this to their Lovelace resources manually or via UI
+    # Register the cards as Lovelace resources
+    # Users need to add these to their Lovelace resources manually or via UI
     _LOGGER.info(
-        "VDA IR Control frontend registered. Add this resource to Lovelace: %s",
-        CARD_URL,
+        "VDA IR Control frontend registered. Add these resources to Lovelace:\n"
+        "  Admin Card: %s\n"
+        "  Remote Card: %s",
+        ADMIN_CARD_URL,
+        REMOTE_CARD_URL,
     )
 
 

@@ -7,7 +7,13 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
 from .const import DOMAIN
-from .models import BoardConfig, DeviceProfile, ControlledDevice
+from .models import (
+    BoardConfig,
+    DeviceProfile,
+    ControlledDevice,
+    NetworkDevice,
+    SerialDevice,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -15,6 +21,8 @@ STORAGE_VERSION = 1
 STORAGE_KEY_BOARDS = f"{DOMAIN}_boards"
 STORAGE_KEY_PROFILES = f"{DOMAIN}_profiles"
 STORAGE_KEY_DEVICES = f"{DOMAIN}_devices"
+STORAGE_KEY_NETWORK_DEVICES = f"{DOMAIN}_network_devices"
+STORAGE_KEY_SERIAL_DEVICES = f"{DOMAIN}_serial_devices"
 
 
 class VDAIRStorage:
@@ -26,11 +34,15 @@ class VDAIRStorage:
         self._boards_store = Store(hass, STORAGE_VERSION, STORAGE_KEY_BOARDS)
         self._profiles_store = Store(hass, STORAGE_VERSION, STORAGE_KEY_PROFILES)
         self._devices_store = Store(hass, STORAGE_VERSION, STORAGE_KEY_DEVICES)
+        self._network_devices_store = Store(hass, STORAGE_VERSION, STORAGE_KEY_NETWORK_DEVICES)
+        self._serial_devices_store = Store(hass, STORAGE_VERSION, STORAGE_KEY_SERIAL_DEVICES)
 
         # In-memory cache
         self._boards: Dict[str, BoardConfig] = {}
         self._profiles: Dict[str, DeviceProfile] = {}
         self._devices: Dict[str, ControlledDevice] = {}
+        self._network_devices: Dict[str, NetworkDevice] = {}
+        self._serial_devices: Dict[str, SerialDevice] = {}
         self._loaded = False
 
     async def async_load(self) -> None:
@@ -56,7 +68,7 @@ class VDAIRStorage:
                 except Exception as err:
                     _LOGGER.error("Failed to load profile %s: %s", profile_id, err)
 
-        # Load controlled devices
+        # Load controlled devices (IR)
         devices_data = await self._devices_store.async_load()
         if devices_data:
             for device_id, device_dict in devices_data.items():
@@ -65,12 +77,32 @@ class VDAIRStorage:
                 except Exception as err:
                     _LOGGER.error("Failed to load device %s: %s", device_id, err)
 
+        # Load network devices
+        network_devices_data = await self._network_devices_store.async_load()
+        if network_devices_data:
+            for device_id, device_dict in network_devices_data.items():
+                try:
+                    self._network_devices[device_id] = NetworkDevice.from_dict(device_dict)
+                except Exception as err:
+                    _LOGGER.error("Failed to load network device %s: %s", device_id, err)
+
+        # Load serial devices
+        serial_devices_data = await self._serial_devices_store.async_load()
+        if serial_devices_data:
+            for device_id, device_dict in serial_devices_data.items():
+                try:
+                    self._serial_devices[device_id] = SerialDevice.from_dict(device_dict)
+                except Exception as err:
+                    _LOGGER.error("Failed to load serial device %s: %s", device_id, err)
+
         self._loaded = True
         _LOGGER.info(
-            "Loaded %d boards, %d profiles, %d devices",
+            "Loaded %d boards, %d profiles, %d IR devices, %d network devices, %d serial devices",
             len(self._boards),
             len(self._profiles),
             len(self._devices),
+            len(self._network_devices),
+            len(self._serial_devices),
         )
 
     async def _async_save_boards(self) -> None:
@@ -87,6 +119,16 @@ class VDAIRStorage:
         """Save devices to storage."""
         data = {k: v.to_dict() for k, v in self._devices.items()}
         await self._devices_store.async_save(data)
+
+    async def _async_save_network_devices(self) -> None:
+        """Save network devices to storage."""
+        data = {k: v.to_dict() for k, v in self._network_devices.items()}
+        await self._network_devices_store.async_save(data)
+
+    async def _async_save_serial_devices(self) -> None:
+        """Save serial devices to storage."""
+        data = {k: v.to_dict() for k, v in self._serial_devices.items()}
+        await self._serial_devices_store.async_save(data)
 
     # Board operations
     async def async_get_board(self, board_id: str) -> Optional[BoardConfig]:
@@ -202,7 +244,151 @@ class VDAIRStorage:
         for device in self._devices.values():
             if device.location:
                 locations.add(device.location)
+        # Also include locations from network and serial devices
+        for device in self._network_devices.values():
+            if device.location:
+                locations.add(device.location)
+        for device in self._serial_devices.values():
+            if device.location:
+                locations.add(device.location)
         return sorted(list(locations))
+
+    # Network device operations
+    async def async_get_network_device(self, device_id: str) -> Optional[NetworkDevice]:
+        """Get a network device by ID."""
+        await self.async_load()
+        return self._network_devices.get(device_id)
+
+    async def async_get_all_network_devices(self) -> List[NetworkDevice]:
+        """Get all network devices."""
+        await self.async_load()
+        return list(self._network_devices.values())
+
+    async def async_get_network_devices_by_location(self, location: str) -> List[NetworkDevice]:
+        """Get all network devices in a specific location."""
+        await self.async_load()
+        return [d for d in self._network_devices.values() if d.location == location]
+
+    async def async_save_network_device(self, device: NetworkDevice) -> None:
+        """Save or update a network device."""
+        await self.async_load()
+        self._network_devices[device.device_id] = device
+        await self._async_save_network_devices()
+
+    async def async_delete_network_device(self, device_id: str) -> None:
+        """Delete a network device."""
+        await self.async_load()
+        if device_id in self._network_devices:
+            del self._network_devices[device_id]
+            await self._async_save_network_devices()
+
+    async def async_add_command_to_network_device(
+        self,
+        device_id: str,
+        command: "DeviceCommand",
+    ) -> bool:
+        """Add a command to a network device."""
+        from .models import DeviceCommand  # Avoid circular import
+        await self.async_load()
+        device = self._network_devices.get(device_id)
+        if device is None:
+            _LOGGER.error("Network device %s not found", device_id)
+            return False
+
+        device.add_command(command)
+        await self._async_save_network_devices()
+        _LOGGER.info("Added command %s to network device %s", command.command_id, device_id)
+        return True
+
+    async def async_delete_command_from_network_device(
+        self,
+        device_id: str,
+        command_id: str,
+    ) -> bool:
+        """Delete a command from a network device."""
+        await self.async_load()
+        device = self._network_devices.get(device_id)
+        if device is None:
+            _LOGGER.error("Network device %s not found", device_id)
+            return False
+
+        if command_id in device.commands:
+            del device.commands[command_id]
+            await self._async_save_network_devices()
+            _LOGGER.info("Deleted command %s from network device %s", command_id, device_id)
+            return True
+        return False
+
+    # Serial device operations
+    async def async_get_serial_device(self, device_id: str) -> Optional[SerialDevice]:
+        """Get a serial device by ID."""
+        await self.async_load()
+        return self._serial_devices.get(device_id)
+
+    async def async_get_all_serial_devices(self) -> List[SerialDevice]:
+        """Get all serial devices."""
+        await self.async_load()
+        return list(self._serial_devices.values())
+
+    async def async_get_serial_devices_by_location(self, location: str) -> List[SerialDevice]:
+        """Get all serial devices in a specific location."""
+        await self.async_load()
+        return [d for d in self._serial_devices.values() if d.location == location]
+
+    async def async_get_serial_devices_by_board(self, board_id: str) -> List[SerialDevice]:
+        """Get all serial devices bridged via a specific board."""
+        await self.async_load()
+        return [d for d in self._serial_devices.values() if d.bridge_board_id == board_id]
+
+    async def async_save_serial_device(self, device: SerialDevice) -> None:
+        """Save or update a serial device."""
+        await self.async_load()
+        self._serial_devices[device.device_id] = device
+        await self._async_save_serial_devices()
+
+    async def async_delete_serial_device(self, device_id: str) -> None:
+        """Delete a serial device."""
+        await self.async_load()
+        if device_id in self._serial_devices:
+            del self._serial_devices[device_id]
+            await self._async_save_serial_devices()
+
+    async def async_add_command_to_serial_device(
+        self,
+        device_id: str,
+        command: "DeviceCommand",
+    ) -> bool:
+        """Add a command to a serial device."""
+        from .models import DeviceCommand  # Avoid circular import
+        await self.async_load()
+        device = self._serial_devices.get(device_id)
+        if device is None:
+            _LOGGER.error("Serial device %s not found", device_id)
+            return False
+
+        device.add_command(command)
+        await self._async_save_serial_devices()
+        _LOGGER.info("Added command %s to serial device %s", command.command_id, device_id)
+        return True
+
+    async def async_delete_command_from_serial_device(
+        self,
+        device_id: str,
+        command_id: str,
+    ) -> bool:
+        """Delete a command from a serial device."""
+        await self.async_load()
+        device = self._serial_devices.get(device_id)
+        if device is None:
+            _LOGGER.error("Serial device %s not found", device_id)
+            return False
+
+        if command_id in device.commands:
+            del device.commands[command_id]
+            await self._async_save_serial_devices()
+            _LOGGER.info("Deleted command %s from serial device %s", command_id, device_id)
+            return True
+        return False
 
 
 def get_storage(hass: HomeAssistant) -> VDAIRStorage:

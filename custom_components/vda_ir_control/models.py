@@ -183,6 +183,10 @@ class ControlledDevice:
     device_profile_id: str = ""  # Links to DeviceProfile
     board_id: str = ""  # Which board controls this device
     output_port: int = 0  # Which port on the board
+    # Matrix linking (optional) - links this device to an HDMI matrix output
+    matrix_device_id: Optional[str] = None  # Network/Serial device ID of the matrix
+    matrix_device_type: Optional[str] = None  # "network" or "serial"
+    matrix_output: Optional[str] = None  # Which output on the matrix this device is connected to
 
     def to_dict(self) -> dict:
         return {
@@ -192,6 +196,9 @@ class ControlledDevice:
             "device_profile_id": self.device_profile_id,
             "board_id": self.board_id,
             "output_port": self.output_port,
+            "matrix_device_id": self.matrix_device_id,
+            "matrix_device_type": self.matrix_device_type,
+            "matrix_output": self.matrix_output,
         }
 
     @classmethod
@@ -203,6 +210,9 @@ class ControlledDevice:
             device_profile_id=data.get("device_profile_id", ""),
             board_id=data.get("board_id", ""),
             output_port=data.get("output_port", 0),
+            matrix_device_id=data.get("matrix_device_id"),
+            matrix_device_type=data.get("matrix_device_type"),
+            matrix_output=data.get("matrix_output"),
         )
 
 
@@ -425,6 +435,44 @@ class DeviceState:
 
 
 @dataclass
+class MatrixInput:
+    """Configuration for a matrix input."""
+    index: int
+    name: str = ""
+    device_id: Optional[str] = None  # Linked source device (Apple TV, Roku, etc.)
+
+    def to_dict(self) -> dict:
+        return {"index": self.index, "name": self.name, "device_id": self.device_id}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "MatrixInput":
+        return cls(
+            index=data.get("index", 1),
+            name=data.get("name", ""),
+            device_id=data.get("device_id"),
+        )
+
+
+@dataclass
+class MatrixOutput:
+    """Configuration for a matrix output."""
+    index: int
+    name: str = ""
+    device_id: Optional[str] = None  # Linked display device (TV, Projector, etc.)
+
+    def to_dict(self) -> dict:
+        return {"index": self.index, "name": self.name, "device_id": self.device_id}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "MatrixOutput":
+        return cls(
+            index=data.get("index", 1),
+            name=data.get("name", ""),
+            device_id=data.get("device_id"),
+        )
+
+
+@dataclass
 class NetworkDevice:
     """A network-controlled device (TCP/UDP)."""
     device_id: str
@@ -436,6 +484,9 @@ class NetworkDevice:
     commands: Dict[str, DeviceCommand] = field(default_factory=dict)
     # Global response patterns (apply to all responses)
     global_response_patterns: List[ResponsePattern] = field(default_factory=list)
+    # Matrix I/O configuration (for hdmi_matrix type)
+    matrix_inputs: List[MatrixInput] = field(default_factory=list)
+    matrix_outputs: List[MatrixOutput] = field(default_factory=list)
 
     def add_command(self, command: DeviceCommand) -> None:
         """Add a command to this device."""
@@ -463,6 +514,8 @@ class NetworkDevice:
             "network_config": self.network_config.to_dict(),
             "commands": {k: v.to_dict() for k, v in self.commands.items()},
             "global_response_patterns": [p.to_dict() for p in self.global_response_patterns],
+            "matrix_inputs": [i.to_dict() for i in self.matrix_inputs],
+            "matrix_outputs": [o.to_dict() for o in self.matrix_outputs],
         }
 
     @classmethod
@@ -476,6 +529,16 @@ class NetworkDevice:
             for p in data.get("global_response_patterns", [])
         ]
 
+        matrix_inputs = [
+            MatrixInput.from_dict(i)
+            for i in data.get("matrix_inputs", [])
+        ]
+
+        matrix_outputs = [
+            MatrixOutput.from_dict(o)
+            for o in data.get("matrix_outputs", [])
+        ]
+
         return cls(
             device_id=data["device_id"],
             name=data["name"],
@@ -485,6 +548,8 @@ class NetworkDevice:
             network_config=NetworkConfig.from_dict(data.get("network_config", {})),
             commands=commands,
             global_response_patterns=patterns,
+            matrix_inputs=matrix_inputs,
+            matrix_outputs=matrix_outputs,
         )
 
 
@@ -501,6 +566,9 @@ class SerialDevice:
     bridge_board_id: str = ""
     commands: Dict[str, DeviceCommand] = field(default_factory=dict)
     global_response_patterns: List[ResponsePattern] = field(default_factory=list)
+    # For HDMI matrices - input/output configuration
+    matrix_inputs: List[MatrixInput] = field(default_factory=list)
+    matrix_outputs: List[MatrixOutput] = field(default_factory=list)
 
     def add_command(self, command: DeviceCommand) -> None:
         """Add a command to this device."""
@@ -529,6 +597,8 @@ class SerialDevice:
             "bridge_board_id": self.bridge_board_id,
             "commands": {k: v.to_dict() for k, v in self.commands.items()},
             "global_response_patterns": [p.to_dict() for p in self.global_response_patterns],
+            "matrix_inputs": [i.to_dict() for i in self.matrix_inputs],
+            "matrix_outputs": [o.to_dict() for o in self.matrix_outputs],
         }
 
     @classmethod
@@ -542,6 +612,16 @@ class SerialDevice:
             for p in data.get("global_response_patterns", [])
         ]
 
+        matrix_inputs = [
+            MatrixInput.from_dict(i)
+            for i in data.get("matrix_inputs", [])
+        ]
+
+        matrix_outputs = [
+            MatrixOutput.from_dict(o)
+            for o in data.get("matrix_outputs", [])
+        ]
+
         return cls(
             device_id=data["device_id"],
             name=data["name"],
@@ -552,4 +632,6 @@ class SerialDevice:
             bridge_board_id=data.get("bridge_board_id", ""),
             commands=commands,
             global_response_patterns=patterns,
+            matrix_inputs=matrix_inputs,
+            matrix_outputs=matrix_outputs,
         )

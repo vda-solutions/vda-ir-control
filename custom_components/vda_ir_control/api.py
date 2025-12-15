@@ -469,6 +469,115 @@ class VDAIRNetworkDevicesView(HomeAssistantView):
             network_config=network_config,
         )
 
+        # If matrix_config is provided, auto-create routing commands
+        matrix_config = data.get("matrix_config")
+        if matrix_config and data.get("device_type") == "hdmi_matrix":
+            inputs = matrix_config.get("inputs", [])
+            outputs = matrix_config.get("outputs", [])
+            command_template = matrix_config.get("command_template", "")
+            line_ending_str = matrix_config.get("line_ending", "crlf")
+
+            # Map line ending string to enum
+            line_ending_map = {
+                "none": LineEnding.NONE,
+                "cr": LineEnding.CR,
+                "lf": LineEnding.LF,
+                "crlf": LineEnding.CRLF,
+            }
+            line_ending = line_ending_map.get(line_ending_str, LineEnding.CRLF)
+
+            # If we have a command template, generate routing commands for each input/output combo
+            if command_template and "{input}" in command_template and "{output}" in command_template:
+                # Generate routing commands: one for each output, each input is an option
+                for output_info in outputs:
+                    output_idx = output_info.get("index", 1)
+                    output_name = output_info.get("name", f"Output {output_idx}")
+
+                    for input_info in inputs:
+                        input_idx = input_info.get("index", 1)
+                        input_name = input_info.get("name", f"HDMI {input_idx}")
+
+                        # Generate the actual command by replacing placeholders
+                        payload = command_template.replace("{input}", str(input_idx)).replace("{output}", str(output_idx))
+
+                        command = DeviceCommand(
+                            command_id=f"route_in{input_idx}_out{output_idx}",
+                            name=f"{input_name} → {output_name}",
+                            format=CommandFormat.TEXT,
+                            payload=payload,
+                            line_ending=line_ending,
+                            is_input_option=True,  # Makes it appear in input selector
+                            input_value=str(input_idx),  # The input this command selects
+                        )
+                        device.add_command(command)
+
+                _LOGGER.info("Created %d routing commands from template for matrix device %s",
+                            len(inputs) * len(outputs), device.device_id)
+            else:
+                # No template - create placeholder input commands (old behavior)
+                for input_info in inputs:
+                    idx = input_info.get("index", 1)
+                    input_name = input_info.get("name", f"HDMI {idx}")
+                    command = DeviceCommand(
+                        command_id=f"input_{idx}",
+                        name=input_name,
+                        format=CommandFormat.TEXT,
+                        payload=f"input_{idx}",  # Placeholder - user will update with actual command
+                        line_ending=LineEnding.NONE,
+                        is_input_option=True,
+                        input_value=str(idx),
+                    )
+                    device.add_command(command)
+
+            # Create status query command(s) if provided
+            status_template = matrix_config.get("status_command", "")
+            if status_template:
+                if "{output}" in status_template:
+                    # Per-output status queries
+                    for output_info in outputs:
+                        output_idx = output_info.get("index", 1)
+                        output_name = output_info.get("name", f"Output {output_idx}")
+                        payload = status_template.replace("{output}", str(output_idx))
+
+                        status_cmd = DeviceCommand(
+                            command_id=f"query_status_out{output_idx}",
+                            name=f"Query {output_name} Status",
+                            format=CommandFormat.TEXT,
+                            payload=payload,
+                            line_ending=line_ending,
+                            is_query=True,
+                            state_key=f"output_{output_idx}_status",
+                        )
+                        device.add_command(status_cmd)
+                    _LOGGER.info("Created %d per-output status query commands for matrix device %s",
+                                len(outputs), device.device_id)
+                else:
+                    # Single global status query
+                    status_cmd = DeviceCommand(
+                        command_id="query_status",
+                        name="Query Status",
+                        format=CommandFormat.TEXT,
+                        payload=status_template,
+                        line_ending=line_ending,
+                        is_query=True,
+                        state_key="matrix_status",
+                    )
+                    device.add_command(status_cmd)
+                    _LOGGER.info("Created global status query command for matrix device %s", device.device_id)
+
+            # Store input/output configuration for matrix routing
+            from .models import MatrixInput, MatrixOutput
+            device.matrix_inputs = [
+                MatrixInput(index=i_info.get("index", i+1), name=i_info.get("name", f"Input {i+1}"))
+                for i, i_info in enumerate(inputs)
+            ]
+            device.matrix_outputs = [
+                MatrixOutput(index=o.get("index", i+1), name=o.get("name", f"Output {i+1}"))
+                for i, o in enumerate(outputs)
+            ]
+            _LOGGER.info("Created %d inputs and %d outputs for matrix device %s",
+                        len(inputs), len(outputs), device.device_id)
+
         await storage.async_save_network_device(device)
         _LOGGER.info("Created network device: %s", device.device_id)
 
@@ -514,9 +623,54 @@ class VDAIRNetworkDeviceView(HomeAssistantView):
             "network_config": device.network_config.to_dict(),
             "commands": {k: v.to_dict() for k, v in device.commands.items()},
             "global_response_patterns": [p.to_dict() for p in device.global_response_patterns],
+            "matrix_inputs": [i.to_dict() for i in device.matrix_inputs],
+            "matrix_outputs": [o.to_dict() for o in device.matrix_outputs],
             "connected": coordinator.is_connected if coordinator else False,
             "device_state": coordinator.device_state.to_dict() if coordinator else None,
         })
+
+    async def put(self, request, device_id):
+        """Update a network device (matrix I/O assignments)."""
+        hass = request.app["hass"]
+        storage = get_storage(hass)
+
+        device = await storage.async_get_network_device(device_id)
+        if device is None:
+            return self.json({"error": "Device not found"}, status_code=404)
+
+        try:
+            data = await request.json()
+        except Exception:
+            return self.json({"error": "Invalid JSON"}, status_code=400)
+
+        # Update matrix inputs if provided
+        if "matrix_inputs" in data:
+            from .models import MatrixInput
+            device.matrix_inputs = [
+                MatrixInput(
+                    index=i.get("index", idx+1),
+                    name=i.get("name", ""),
+                    device_id=i.get("device_id"),
+                )
+                for idx, i in enumerate(data["matrix_inputs"])
+            ]
+
+        # Update matrix outputs if provided
+        if "matrix_outputs" in data:
+            from .models import MatrixOutput
+            device.matrix_outputs = [
+                MatrixOutput(
+                    index=o.get("index", idx+1),
+                    name=o.get("name", ""),
+                    device_id=o.get("device_id"),
+                )
+                for idx, o in enumerate(data["matrix_outputs"])
+            ]
+
+        await storage.async_save_network_device(device)
+        _LOGGER.info("Updated network device: %s", device_id)
+
+        return self.json({"success": True})
 
     async def delete(self, request, device_id):
         """Delete a network device."""
@@ -825,14 +979,19 @@ class VDAIRSerialDevicesView(HomeAssistantView):
         result = []
         for device in devices:
             coordinator = get_serial_coordinator(hass, device.device_id)
+            # mode: 'direct' if serial_direct, otherwise 'bridge'
+            mode = 'direct' if device.transport_type == TransportType.SERIAL_DIRECT else 'bridge'
             result.append({
                 "device_id": device.device_id,
                 "name": device.name,
                 "device_type": device.device_type.value,
                 "transport_type": device.transport_type.value,
+                "mode": mode,
                 "port": device.serial_config.port,
                 "baud_rate": device.serial_config.baud_rate,
+                "board_id": device.bridge_board_id,
                 "bridge_board_id": device.bridge_board_id,
+                "uart_num": device.serial_config.uart_number,
                 "location": device.location,
                 "connected": coordinator.is_connected if coordinator else False,
                 "command_count": len(device.commands),
@@ -937,9 +1096,54 @@ class VDAIRSerialDeviceView(HomeAssistantView):
             "bridge_board_id": device.bridge_board_id,
             "commands": {k: v.to_dict() for k, v in device.commands.items()},
             "global_response_patterns": [p.to_dict() for p in device.global_response_patterns],
+            "matrix_inputs": [i.to_dict() for i in device.matrix_inputs],
+            "matrix_outputs": [o.to_dict() for o in device.matrix_outputs],
             "connected": coordinator.is_connected if coordinator else False,
             "device_state": coordinator.device_state.to_dict() if coordinator else None,
         })
+
+    async def put(self, request, device_id):
+        """Update a serial device (matrix I/O assignments)."""
+        hass = request.app["hass"]
+        storage = get_storage(hass)
+
+        device = await storage.async_get_serial_device(device_id)
+        if device is None:
+            return self.json({"error": "Device not found"}, status_code=404)
+
+        try:
+            data = await request.json()
+        except Exception:
+            return self.json({"error": "Invalid JSON"}, status_code=400)
+
+        # Update matrix inputs if provided
+        if "matrix_inputs" in data:
+            from .models import MatrixInput
+            device.matrix_inputs = [
+                MatrixInput(
+                    index=i.get("index", idx+1),
+                    name=i.get("name", ""),
+                    device_id=i.get("device_id"),
+                )
+                for idx, i in enumerate(data["matrix_inputs"])
+            ]
+
+        # Update matrix outputs if provided
+        if "matrix_outputs" in data:
+            from .models import MatrixOutput
+            device.matrix_outputs = [
+                MatrixOutput(
+                    index=o.get("index", idx+1),
+                    name=o.get("name", ""),
+                    device_id=o.get("device_id"),
+                )
+                for idx, o in enumerate(data["matrix_outputs"])
+            ]
+
+        await storage.async_save_serial_device(device)
+        _LOGGER.info("Updated serial device: %s", device_id)
+
+        return self.json({"success": True})
 
     async def delete(self, request, device_id):
         """Delete a serial device."""

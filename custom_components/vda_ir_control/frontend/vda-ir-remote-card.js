@@ -13,6 +13,12 @@ class VDAIRRemoteCard extends HTMLElement {
     this._commands = [];
     this._showRemote = false;
     this._lastSent = null;
+    // Matrix linking
+    this._matrixDevice = null;
+    this._matrixInputCommands = [];
+    this._selectedMatrixInput = null;
+    // All controlled devices (for looking up device names for matrix inputs)
+    this._allDevices = [];
   }
 
   set hass(hass) {
@@ -67,12 +73,73 @@ class VDAIRRemoteCard extends HTMLElement {
       // Get commands from profile
       if (this._device) {
         await this._loadCommands();
+        // Load matrix device if linked
+        await this._loadMatrixDevice();
       }
 
       this._render();
     } catch (e) {
       console.error('Failed to load device data:', e);
       this._render();
+    }
+  }
+
+  async _loadMatrixDevice() {
+    if (!this._device || !this._device.matrix_device_id) {
+      this._matrixDevice = null;
+      this._matrixInputCommands = [];
+      return;
+    }
+
+    const matrixId = this._device.matrix_device_id;
+    const matrixType = this._device.matrix_device_type;
+
+    try {
+      // Load matrix device and all controlled devices in parallel
+      const endpoint = matrixType === 'network'
+        ? `/api/vda_ir_control/network_devices/${matrixId}`
+        : `/api/vda_ir_control/serial_devices/${matrixId}`;
+
+      const [matrixResp, devicesResp] = await Promise.all([
+        fetch(endpoint, {
+          headers: { 'Authorization': `Bearer ${this._hass.auth.data.access_token}` },
+        }),
+        fetch('/api/vda_ir_control/devices', {
+          headers: { 'Authorization': `Bearer ${this._hass.auth.data.access_token}` },
+        })
+      ]);
+
+      if (matrixResp.ok) {
+        this._matrixDevice = await matrixResp.json();
+        // Get input commands (is_input_option=true)
+        const commands = this._matrixDevice.commands || {};
+        let inputCommands = Object.values(commands).filter(cmd => cmd.is_input_option);
+
+        // If device is connected to a specific output, filter to only show commands for that output
+        const deviceOutput = this._device.matrix_output;
+        if (deviceOutput) {
+          // Filter commands that route to this output (command_id pattern: route_in{X}_out{Y})
+          const outputSuffix = `_out${deviceOutput}`;
+          const filteredCommands = inputCommands.filter(cmd =>
+            cmd.command_id && cmd.command_id.includes(outputSuffix)
+          );
+          // Use filtered if we found matches, otherwise fall back to all (for backwards compatibility)
+          if (filteredCommands.length > 0) {
+            inputCommands = filteredCommands;
+          }
+        }
+
+        this._matrixInputCommands = inputCommands;
+      }
+
+      if (devicesResp.ok) {
+        const devicesData = await devicesResp.json();
+        this._allDevices = devicesData.devices || [];
+      }
+    } catch (e) {
+      console.error('Failed to load matrix device:', e);
+      this._matrixDevice = null;
+      this._matrixInputCommands = [];
     }
   }
 
@@ -124,6 +191,46 @@ class VDAIRRemoteCard extends HTMLElement {
 
     const defaultBtns = defaults[this._deviceType] || ['power', 'volume_up', 'volume_down'];
     return defaultBtns.filter(cmd => this._commands.includes(cmd));
+  }
+
+  /**
+   * Get display name for a matrix input command.
+   * Shows the assigned device name if available, otherwise the input name.
+   * For routing commands like "HDMI 1 → Output 3", we strip the output part since
+   * we're already filtering by output.
+   */
+  _getMatrixInputDisplayName(cmd) {
+    if (!this._matrixDevice || !cmd.input_value) {
+      // If command name has " → ", take just the first part (input name)
+      if (cmd.name && cmd.name.includes(' → ')) {
+        return cmd.name.split(' → ')[0];
+      }
+      return cmd.name;
+    }
+
+    // Find the matrix input that matches this command's input_value
+    const matrixInputs = this._matrixDevice.matrix_inputs || [];
+    const matchingInput = matrixInputs.find(mi => String(mi.index) === String(cmd.input_value));
+
+    if (matchingInput && matchingInput.device_id) {
+      // Look up the device name
+      const device = this._allDevices.find(d => d.device_id === matchingInput.device_id);
+      if (device) {
+        return device.name;
+      }
+    }
+
+    // Fall back to custom input name if set
+    if (matchingInput && matchingInput.name) {
+      return matchingInput.name;
+    }
+
+    // If command name has " → ", take just the first part (input name)
+    if (cmd.name && cmd.name.includes(' → ')) {
+      return cmd.name.split(' → ')[0];
+    }
+
+    return cmd.name;
   }
 
   _render() {
@@ -430,6 +537,36 @@ class VDAIRRemoteCard extends HTMLElement {
           padding: 6px 8px;
           font-size: 11px;
         }
+        /* Matrix input styles */
+        .matrix-input-section {
+          background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-color) 100%);
+          opacity: 0.95;
+        }
+        .matrix-input-section .section-label {
+          color: white;
+          opacity: 0.9;
+        }
+        .matrix-input-row {
+          display: flex;
+          justify-content: center;
+          gap: 4px;
+          flex-wrap: wrap;
+        }
+        .matrix-input-btn {
+          padding: 6px 10px;
+          font-size: 11px;
+          background: rgba(255,255,255,0.2) !important;
+          color: white !important;
+          border: 1px solid rgba(255,255,255,0.3) !important;
+        }
+        .matrix-input-btn:hover {
+          background: rgba(255,255,255,0.4) !important;
+        }
+        .matrix-input-btn.selected {
+          background: white !important;
+          color: var(--primary-color) !important;
+          font-weight: 600;
+        }
         .not-found {
           padding: 16px;
           text-align: center;
@@ -532,6 +669,14 @@ class VDAIRRemoteCard extends HTMLElement {
             this._sendCommand(command);
           });
         }
+      });
+
+      // Matrix input buttons
+      this.shadowRoot.querySelectorAll('[data-matrix-command]').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this._sendMatrixCommand(btn.dataset.matrixCommand);
+        });
       });
     }
   }
@@ -752,6 +897,21 @@ class VDAIRRemoteCard extends HTMLElement {
         </div>
       ` : ''}
 
+      <!-- Matrix Input Selector -->
+      ${this._matrixDevice && this._matrixInputCommands.length > 0 ? `
+        <div class="remote-section matrix-input-section">
+          <div class="section-label">Matrix Input (${this._matrixDevice.name})</div>
+          <div class="matrix-input-row">
+            ${this._matrixInputCommands.map(cmd => `
+              <button class="btn matrix-input-btn ${this._selectedMatrixInput === cmd.command_id ? 'selected' : ''}"
+                      data-matrix-command="${cmd.command_id}">
+                ${this._getMatrixInputDisplayName(cmd)}
+              </button>
+            `).join('')}
+          </div>
+        </div>
+      ` : ''}
+
       <!-- Navigation D-Pad -->
       ${navCmds.length > 0 ? `
         <div class="remote-section">
@@ -865,6 +1025,36 @@ class VDAIRRemoteCard extends HTMLElement {
       }, 1000);
     } catch (e) {
       console.error('Failed to send command:', e);
+    }
+  }
+
+  async _sendMatrixCommand(commandId) {
+    if (!this._matrixDevice || !this._device) return;
+
+    const matrixType = this._device.matrix_device_type;
+    const matrixId = this._device.matrix_device_id;
+
+    try {
+      // Call the appropriate service based on matrix type
+      const serviceName = matrixType === 'network' ? 'send_network_command' : 'send_serial_command';
+      await this._hass.callService('vda_ir_control', serviceName, {
+        device_id: matrixId,
+        command_id: commandId,
+      });
+
+      this._selectedMatrixInput = commandId;
+      this._lastSent = `Matrix: ${commandId}`;
+      this._render();
+
+      // Clear indicator after 2s (longer for matrix since it's a selection)
+      setTimeout(() => {
+        if (this._lastSent === `Matrix: ${commandId}`) {
+          this._lastSent = null;
+          this._render();
+        }
+      }, 2000);
+    } catch (e) {
+      console.error('Failed to send matrix command:', e);
     }
   }
 

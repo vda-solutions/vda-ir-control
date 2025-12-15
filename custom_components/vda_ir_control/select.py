@@ -31,7 +31,7 @@ async def async_setup_entry(
     entities = []
     for device in network_devices:
         # Get input option commands
-        input_commands = device.get_input_commands()
+        input_commands = device.get_input_options()
         if input_commands:
             # Get or create coordinator
             coordinator = get_network_coordinator(hass, device.device_id)

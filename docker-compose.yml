@@ -8,6 +8,8 @@ services:
     volumes:
       - ./config:/config
       - /etc/localtime:/etc/localtime:ro
+    # NOTE: Serial devices on macOS can't be passed to Docker directly
+    # Use ESP32 Bridge mode or ser2net for serial device access
     restart: unless-stopped
     # IMPORTANT: network_mode: host required for discovering ESP32 boards on local network
     network_mode: host

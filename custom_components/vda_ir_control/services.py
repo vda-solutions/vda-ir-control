@@ -109,10 +109,26 @@ CREATE_DEVICE_SCHEMA = vol.Schema({
     vol.Required("board_id"): str,
     vol.Required("output_port"): GPIO_PORT_RANGE,
     vol.Optional("location", default=""): str,
+    # Matrix linking (optional)
+    vol.Optional("matrix_device_id"): vol.Any(str, None),
+    vol.Optional("matrix_device_type"): vol.Any(vol.In(["network", "serial"]), None),
+    vol.Optional("matrix_output"): vol.Any(str, None),
 })
 
 DELETE_DEVICE_SCHEMA = vol.Schema({
     vol.Required("device_id"): str,
+})
+
+UPDATE_DEVICE_SCHEMA = vol.Schema({
+    vol.Required("device_id"): str,
+    vol.Optional("name"): str,
+    vol.Optional("location"): vol.Any(str, None),
+    vol.Optional("device_profile_id"): str,
+    vol.Optional("board_id"): str,
+    vol.Optional("output_port"): GPIO_PORT_RANGE,
+    vol.Optional("matrix_device_id"): vol.Any(str, None),
+    vol.Optional("matrix_device_type"): vol.Any(vol.In(["network", "serial"]), None),
+    vol.Optional("matrix_output"): vol.Any(str, None),
 })
 
 LIST_DEVICES_SCHEMA = vol.Schema({})
@@ -590,6 +606,9 @@ async def async_setup_services(hass: HomeAssistant) -> None:
             device_profile_id=device_profile_id,
             board_id=call.data["board_id"],
             output_port=call.data["output_port"],
+            matrix_device_id=call.data.get("matrix_device_id"),
+            matrix_device_type=call.data.get("matrix_device_type"),
+            matrix_output=call.data.get("matrix_output"),
         )
 
         await storage.async_save_device(device)
@@ -633,6 +652,72 @@ async def async_setup_services(hass: HomeAssistant) -> None:
                     break
 
         return {"success": True}
+
+    async def handle_update_device(call: ServiceCall) -> Dict[str, Any]:
+        """Handle update_device service - update an existing device."""
+        storage = get_storage(hass)
+        device_id = call.data["device_id"]
+
+        # Get existing device
+        device = await storage.async_get_device(device_id)
+        if device is None:
+            raise ServiceValidationError(f"Device '{device_id}' not found")
+
+        old_board_id = device.board_id
+
+        # Update fields if provided
+        if "name" in call.data:
+            device.name = call.data["name"]
+        if "location" in call.data:
+            device.location = call.data["location"] or ""
+        if "device_profile_id" in call.data:
+            profile_id = call.data["device_profile_id"]
+            # Validate profile exists
+            if profile_id.startswith("builtin:"):
+                builtin_id = profile_id[8:]
+                builtin_profile = get_builtin_profile(builtin_id)
+                if builtin_profile is None:
+                    raise ServiceValidationError(f"Built-in profile '{builtin_id}' not found")
+            else:
+                profile = await storage.async_get_profile(profile_id)
+                if profile is None:
+                    raise ServiceValidationError(f"Profile '{profile_id}' not found")
+            device.device_profile_id = profile_id
+        if "board_id" in call.data:
+            device.board_id = call.data["board_id"]
+        if "output_port" in call.data:
+            device.output_port = call.data["output_port"]
+
+        # Update matrix link fields
+        if "matrix_device_id" in call.data:
+            device.matrix_device_id = call.data["matrix_device_id"]
+        if "matrix_device_type" in call.data:
+            device.matrix_device_type = call.data["matrix_device_type"]
+        if "matrix_output" in call.data:
+            device.matrix_output = call.data["matrix_output"]
+
+        await storage.async_save_device(device)
+        _LOGGER.info("Updated device: %s", device_id)
+
+        # Reload config entry if board changed or to update entities
+        board_ids_to_reload = set()
+        if old_board_id:
+            board_ids_to_reload.add(old_board_id)
+        if device.board_id:
+            board_ids_to_reload.add(device.board_id)
+
+        for board_id in board_ids_to_reload:
+            for entry_id, coordinator in hass.data.get(DOMAIN, {}).items():
+                if entry_id == "storage":
+                    continue
+                if hasattr(coordinator, "board_id") and coordinator.board_id == board_id:
+                    entry = hass.config_entries.async_get_entry(entry_id)
+                    if entry:
+                        await hass.config_entries.async_reload(entry_id)
+                        _LOGGER.info("Reloaded config entry after updating device: %s", device_id)
+                    break
+
+        return {"success": True, "device_id": device_id}
 
     async def handle_list_devices(call: ServiceCall) -> Dict[str, Any]:
         """Handle list_devices service."""
@@ -1306,6 +1391,10 @@ async def async_setup_services(hass: HomeAssistant) -> None:
     hass.services.async_register(
         DOMAIN, "delete_device", handle_delete_device,
         schema=DELETE_DEVICE_SCHEMA, supports_response=SupportsResponse.OPTIONAL
+    )
+    hass.services.async_register(
+        DOMAIN, "update_device", handle_update_device,
+        schema=UPDATE_DEVICE_SCHEMA, supports_response=SupportsResponse.OPTIONAL
     )
     hass.services.async_register(
         DOMAIN, "list_devices", handle_list_devices,

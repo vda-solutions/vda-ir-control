@@ -388,6 +388,7 @@ class VDAIRControlCard extends HTMLElement {
         :host {
           display: block;
           padding: 16px;
+          position: relative;
         }
         .card {
           background: var(--ha-card-background, var(--card-background-color, white));
@@ -743,23 +744,24 @@ class VDAIRControlCard extends HTMLElement {
           position: fixed;
           top: 0;
           left: 0;
-          right: 0;
-          bottom: 0;
+          width: 100vw;
+          height: 100vh;
           background: rgba(0,0,0,0.5);
           display: flex;
           align-items: center;
           justify-content: center;
-          z-index: 1000;
+          z-index: 9999;
         }
         .modal-content {
           background: var(--ha-card-background, var(--card-background-color, white));
           color: var(--primary-text-color, #212121);
           border-radius: 12px;
           padding: 24px;
-          max-width: 500px;
+          max-width: 550px;
           width: 90%;
           max-height: 80vh;
           overflow-y: auto;
+          overflow-x: hidden;
         }
         .modal-title {
           font-size: 18px;
@@ -1056,6 +1058,9 @@ class VDAIRControlCard extends HTMLElement {
               <button class="btn btn-secondary btn-small" data-action="test-device" data-device-id="${device.device_id}">
                 Test
               </button>
+              <button class="btn btn-secondary btn-small" data-action="edit-device" data-device-id="${device.device_id}">
+                Edit
+              </button>
               <button class="btn btn-danger btn-small" data-action="delete-device" data-device-id="${device.device_id}">
                 Delete
               </button>
@@ -1091,6 +1096,7 @@ class VDAIRControlCard extends HTMLElement {
                 <span class="badge ${device.connected ? 'badge-success' : 'badge-danger'}">
                   ${device.connected ? 'Online' : 'Offline'}
                 </span>
+                ${device.device_type === 'hdmi_matrix' ? '<span class="badge badge-info">Matrix</span>' : ''}
                 ${device.location ? `<span class="badge badge-warning">${device.location}</span>` : ''}
               </div>
               <div class="list-item-subtitle">
@@ -1101,6 +1107,11 @@ class VDAIRControlCard extends HTMLElement {
               <button class="btn btn-secondary btn-small" data-action="test-network-device" data-device-id="${device.device_id}">
                 Test
               </button>
+              ${device.device_type === 'hdmi_matrix' ? `
+              <button class="btn btn-secondary btn-small" data-action="edit-matrix-io" data-device-id="${device.device_id}" data-device-type="network">
+                Edit I/O
+              </button>
+              ` : ''}
               <button class="btn btn-secondary btn-small" data-action="edit-network-device" data-device-id="${device.device_id}">
                 Commands
               </button>
@@ -1202,6 +1213,7 @@ class VDAIRControlCard extends HTMLElement {
                   ${device.connected ? 'Online' : 'Offline'}
                 </span>
                 <span class="badge badge-info">${device.mode === 'direct' ? 'Direct' : 'ESP32 Bridge'}</span>
+                ${device.device_type === 'hdmi_matrix' ? '<span class="badge badge-info">Matrix</span>' : ''}
                 ${device.location ? `<span class="badge badge-warning">${device.location}</span>` : ''}
               </div>
               <div class="list-item-subtitle">
@@ -1213,6 +1225,11 @@ class VDAIRControlCard extends HTMLElement {
               <button class="btn btn-secondary btn-small" data-action="test-serial-device" data-device-id="${device.device_id}">
                 Test
               </button>
+              ${device.device_type === 'hdmi_matrix' ? `
+              <button class="btn btn-secondary btn-small" data-action="edit-matrix-io" data-device-id="${device.device_id}" data-device-type="serial">
+                Edit I/O
+              </button>
+              ` : ''}
               <button class="btn btn-secondary btn-small" data-action="edit-serial-device" data-device-id="${device.device_id}">
                 Commands
               </button>
@@ -1310,6 +1327,10 @@ class VDAIRControlCard extends HTMLElement {
         return this._renderCreateSerialDeviceModal();
       case 'add-serial-command':
         return this._renderAddSerialCommandModal();
+      case 'edit-matrix-io':
+        return this._renderEditMatrixIOModal();
+      case 'edit-device':
+        return this._renderEditDeviceModal();
       default:
         return '';
     }
@@ -1435,6 +1456,8 @@ class VDAIRControlCard extends HTMLElement {
               `}
             </div>
           </div>
+
+          ${this._renderMatrixLinkSection()}
 
           <div class="modal-actions">
             <button class="btn btn-secondary" data-action="close-modal">Cancel</button>
@@ -1806,10 +1829,120 @@ class VDAIRControlCard extends HTMLElement {
     return cmd.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
   }
 
+  _renderMatrixLinkSection() {
+    // Combine network and serial devices that could be matrices
+    const matrixDevices = [
+      ...this._networkDevices.map(d => ({ ...d, type: 'network' })),
+      ...this._serialDevices.map(d => ({ ...d, type: 'serial' })),
+    ];
+
+    if (matrixDevices.length === 0) {
+      return `
+        <div style="margin-top: 16px; padding: 12px; background: var(--secondary-background-color, #f5f5f5); border-radius: 8px;">
+          <div style="font-weight: 500; color: var(--secondary-text-color);">Link to HDMI Matrix (Optional)</div>
+          <div style="font-size: 12px; color: var(--secondary-text-color); margin-top: 4px;">
+            No network or serial devices configured. Add a matrix device in the Network or Serial tab first.
+          </div>
+        </div>
+      `;
+    }
+
+    return `
+      <div style="margin-top: 16px; padding: 12px; background: var(--secondary-background-color, #f5f5f5); border-radius: 8px;">
+        <div class="form-group" style="margin-bottom: 8px;">
+          <label><input type="checkbox" id="device-link-matrix" data-action="toggle-matrix-link" style="margin-right: 8px; vertical-align: middle;" />Link to HDMI Matrix</label>
+          <small>Link this device to an HDMI matrix output for input selection</small>
+        </div>
+        <div id="matrix-link-options" style="display: none;">
+          <div class="form-group">
+            <label>Matrix Device</label>
+            <select id="device-matrix-id" data-action="matrix-device-changed">
+              <option value="">Select a matrix...</option>
+              ${matrixDevices.map(d => `
+                <option value="${d.device_id}" data-type="${d.type}">${d.name} (${d.type === 'network' ? 'Network' : 'Serial'})</option>
+              `).join('')}
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Matrix Output</label>
+            <select id="device-matrix-output">
+              <option value="">Select matrix first...</option>
+            </select>
+            <small>Which matrix output is this device connected to?</small>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  _getMatrixOutputOptions(matrixDevice) {
+    // Get input commands (is_input_option=true) from the matrix device
+    // These represent available inputs that can be routed to outputs
+    const commands = matrixDevice.commands || {};
+    const inputCommands = Object.values(commands).filter(cmd => cmd.is_input_option);
+
+    // For now, provide generic output options 1-8
+    // In a real implementation, this could be based on the device type
+    const outputs = [];
+    for (let i = 1; i <= 8; i++) {
+      outputs.push({ value: String(i), label: `Output ${i}` });
+    }
+    return outputs;
+  }
+
+  async _updateMatrixOutputOptions(matrixDeviceId) {
+    const outputSelect = this.shadowRoot.getElementById('device-matrix-output');
+    if (!outputSelect) return;
+
+    if (!matrixDeviceId) {
+      outputSelect.innerHTML = '<option value="">Select matrix first...</option>';
+      return;
+    }
+
+    // Find the matrix device to get its type
+    const matrixIdSelect = this.shadowRoot.getElementById('device-matrix-id');
+    const selectedOption = matrixIdSelect?.options[matrixIdSelect.selectedIndex];
+    const matrixType = selectedOption?.dataset.type;
+
+    // Fetch matrix device to get actual output names
+    try {
+      const endpoint = matrixType === 'network'
+        ? `/api/vda_ir_control/network_devices/${matrixDeviceId}`
+        : `/api/vda_ir_control/serial_devices/${matrixDeviceId}`;
+
+      const resp = await fetch(endpoint, {
+        headers: { 'Authorization': `Bearer ${this._hass.auth.data.access_token}` },
+      });
+
+      if (resp.ok) {
+        const device = await resp.json();
+        const outputs = device.matrix_outputs || [];
+
+        if (outputs.length > 0) {
+          let html = '<option value="">Select output...</option>';
+          outputs.forEach(o => {
+            html += `<option value="${o.index}">${o.name || 'Output ' + o.index}</option>`;
+          });
+          outputSelect.innerHTML = html;
+          return;
+        }
+      }
+    } catch (e) {
+      console.error('Failed to fetch matrix outputs:', e);
+    }
+
+    // Fallback to generic options 1-8
+    let html = '<option value="">Select output...</option>';
+    for (let i = 1; i <= 8; i++) {
+      html += `<option value="${i}">Output ${i}</option>`;
+    }
+    outputSelect.innerHTML = html;
+  }
+
   _renderCreateNetworkDeviceModal() {
     return `
       <div class="modal" data-action="close-modal">
-        <div class="modal-content" style="max-width: 500px;">
+        <div class="modal-content" onclick="event.stopPropagation()" style="max-width: 550px;">
           <div class="modal-header">
             <h3>Add Network Device</h3>
             <button class="modal-close" data-action="close-modal">&times;</button>
@@ -1841,14 +1974,66 @@ class VDAIRControlCard extends HTMLElement {
             </div>
             <div class="form-group">
               <label>Device Type</label>
-              <select id="network-device-type">
+              <select id="network-device-type" data-action="network-device-type-changed">
                 <option value="hdmi_matrix">HDMI Matrix</option>
                 <option value="hdmi_switch">HDMI Switch</option>
                 <option value="av_processor">AV Processor</option>
                 <option value="custom">Custom</option>
               </select>
             </div>
-            <div class="form-group">
+
+            <!-- Matrix Configuration (shown when device type is hdmi_matrix) -->
+            <div id="matrix-config-section" style="margin-top: 16px; padding: 12px; background: var(--secondary-background-color); border-radius: 8px;">
+              <div style="font-weight: 500; margin-bottom: 12px;">Matrix Configuration</div>
+              <div style="display: flex; gap: 16px;">
+                <div class="form-group" style="flex: 1;">
+                  <label>Number of Inputs</label>
+                  <select id="matrix-input-count" data-action="matrix-config-changed">
+                    ${[2,4,6,8,10,12,16].map(n => `<option value="${n}" ${n === 4 ? 'selected' : ''}>${n}</option>`).join('')}
+                  </select>
+                </div>
+                <div class="form-group" style="flex: 1;">
+                  <label>Number of Outputs</label>
+                  <select id="matrix-output-count" data-action="matrix-config-changed">
+                    ${[2,4,6,8,10,12,16].map(n => `<option value="${n}" ${n === 4 ? 'selected' : ''}>${n}</option>`).join('')}
+                  </select>
+                </div>
+              </div>
+
+              <div class="form-group" style="margin-top: 12px;">
+                <label>Routing Command Template</label>
+                <input type="text" id="matrix-command-template" placeholder="s in {input} av out {output}!"
+                       style="font-family: monospace;" />
+                <small style="display: block; margin-top: 4px; color: var(--secondary-text-color);">
+                  Use <code>{input}</code> and <code>{output}</code> as placeholders. Example: <code>s in {input} av out {output}!</code> becomes <code>s in 1 av out 3!</code>
+                </small>
+              </div>
+
+              <div class="form-group" style="margin-top: 8px;">
+                <label>Line Ending</label>
+                <select id="matrix-command-line-ending">
+                  <option value="none">None</option>
+                  <option value="cr">CR (\\r)</option>
+                  <option value="lf">LF (\\n)</option>
+                  <option value="crlf" selected>CRLF (\\r\\n)</option>
+                </select>
+              </div>
+
+              <div class="form-group" style="margin-top: 12px;">
+                <label>Status Query Template (optional)</label>
+                <input type="text" id="matrix-status-command" placeholder="r status! or r out {output} status!"
+                       style="font-family: monospace;" />
+                <small style="display: block; margin-top: 4px; color: var(--secondary-text-color);">
+                  Use <code>{output}</code> for per-output queries (creates one command per output), or no placeholder for a single global status command.
+                </small>
+              </div>
+
+              <div id="matrix-io-names" style="margin-top: 12px;">
+                ${this._renderMatrixIONames(4, 4)}
+              </div>
+            </div>
+
+            <div class="form-group" style="margin-top: 16px;">
               <label>Location (optional)</label>
               <input type="text" id="network-device-location" placeholder="Living Room" />
             </div>
@@ -1866,11 +2051,88 @@ class VDAIRControlCard extends HTMLElement {
     `;
   }
 
+  _renderMatrixIONames(inputCount, outputCount) {
+    return `
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+        <div>
+          <div style="font-size: 12px; font-weight: 500; margin-bottom: 8px; color: var(--secondary-text-color);">Input Names</div>
+          ${Array.from({length: inputCount}, (_, i) => `
+            <div style="margin-bottom: 4px;">
+              <input type="text" class="matrix-input-name" data-index="${i+1}"
+                     placeholder="Input ${i+1}" value="HDMI ${i+1}"
+                     style="width: 100%; padding: 6px 8px; font-size: 12px;" />
+            </div>
+          `).join('')}
+        </div>
+        <div>
+          <div style="font-size: 12px; font-weight: 500; margin-bottom: 8px; color: var(--secondary-text-color);">Output Names</div>
+          ${Array.from({length: outputCount}, (_, i) => `
+            <div style="margin-bottom: 4px;">
+              <input type="text" class="matrix-output-name" data-index="${i+1}"
+                     placeholder="Output ${i+1}" value="Output ${i+1}"
+                     style="width: 100%; padding: 6px 8px; font-size: 12px;" />
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
+  }
+
+  _toggleMatrixConfigSection(deviceType) {
+    const section = this.shadowRoot.getElementById('matrix-config-section');
+    if (section) {
+      section.style.display = (deviceType === 'hdmi_matrix') ? 'block' : 'none';
+    }
+  }
+
+  _updateMatrixIONames() {
+    const inputCount = parseInt(this.shadowRoot.getElementById('matrix-input-count')?.value || 4);
+    const outputCount = parseInt(this.shadowRoot.getElementById('matrix-output-count')?.value || 4);
+    const container = this.shadowRoot.getElementById('matrix-io-names');
+    if (container) {
+      container.innerHTML = this._renderMatrixIONames(inputCount, outputCount);
+    }
+  }
+
+  _getMatrixConfig() {
+    const deviceType = this.shadowRoot.getElementById('network-device-type')?.value;
+    if (deviceType !== 'hdmi_matrix') return null;
+
+    const inputNames = [];
+    const outputNames = [];
+
+    this.shadowRoot.querySelectorAll('.matrix-input-name').forEach(input => {
+      inputNames.push({
+        index: parseInt(input.dataset.index),
+        name: input.value || `HDMI ${input.dataset.index}`
+      });
+    });
+
+    this.shadowRoot.querySelectorAll('.matrix-output-name').forEach(input => {
+      outputNames.push({
+        index: parseInt(input.dataset.index),
+        name: input.value || `Output ${input.dataset.index}`
+      });
+    });
+
+    const commandTemplate = this.shadowRoot.getElementById('matrix-command-template')?.value || '';
+    const lineEnding = this.shadowRoot.getElementById('matrix-command-line-ending')?.value || 'crlf';
+    const statusCommand = this.shadowRoot.getElementById('matrix-status-command')?.value || '';
+
+    return {
+      inputs: inputNames,
+      outputs: outputNames,
+      command_template: commandTemplate,
+      line_ending: lineEnding,
+      status_command: statusCommand
+    };
+  }
+
   _renderAddNetworkCommandModal() {
     const deviceId = this._modal?.deviceId;
     return `
       <div class="modal" data-action="close-modal">
-        <div class="modal-content" style="max-width: 550px;">
+        <div class="modal-content" onclick="event.stopPropagation()" style="max-width: 550px;">
           <div class="modal-header">
             <h3>Add Command</h3>
             <button class="modal-close" data-action="close-modal">&times;</button>
@@ -1910,10 +2172,8 @@ class VDAIRControlCard extends HTMLElement {
               </div>
             </div>
             <div class="form-group">
-              <label style="display: flex; align-items: center; gap: 8px;">
-                <input type="checkbox" id="command-is-input" />
-                This is an input selection option
-              </label>
+              <label><input type="checkbox" id="command-is-input" style="margin-right: 8px; vertical-align: middle;" />Input selection</label>
+              <small>Check if this selects an input (HDMI 1, HDMI 2, etc.)</small>
             </div>
             <div class="form-group" id="input-value-group" style="display: none;">
               <label>Input Value</label>
@@ -1921,10 +2181,8 @@ class VDAIRControlCard extends HTMLElement {
               <small>The value this input represents (e.g., "1" for HDMI 1)</small>
             </div>
             <div class="form-group">
-              <label style="display: flex; align-items: center; gap: 8px;">
-                <input type="checkbox" id="command-is-query" />
-                This is a query command (for state updates)
-              </label>
+              <label><input type="checkbox" id="command-is-query" style="margin-right: 8px; vertical-align: middle;" />Query command</label>
+              <small>Check if this queries device state</small>
             </div>
             <div class="form-group" id="response-pattern-group" style="display: none;">
               <label>Response Pattern (regex)</label>
@@ -1950,7 +2208,7 @@ class VDAIRControlCard extends HTMLElement {
     const boards = this._getBoards();
     return `
       <div class="modal" data-action="close-modal">
-        <div class="modal-content" style="max-width: 550px;">
+        <div class="modal-content" onclick="event.stopPropagation()" style="max-width: 550px;">
           <div class="modal-header">
             <h3>Add Serial Device</h3>
             <button class="modal-close" data-action="close-modal">&times;</button>
@@ -2088,7 +2346,7 @@ class VDAIRControlCard extends HTMLElement {
     const deviceId = this._modal?.deviceId;
     return `
       <div class="modal" data-action="close-modal">
-        <div class="modal-content" style="max-width: 550px;">
+        <div class="modal-content" onclick="event.stopPropagation()" style="max-width: 550px;">
           <div class="modal-header">
             <h3>Add Serial Command</h3>
             <button class="modal-close" data-action="close-modal">&times;</button>
@@ -2128,10 +2386,8 @@ class VDAIRControlCard extends HTMLElement {
               </div>
             </div>
             <div class="form-group">
-              <label style="display: flex; align-items: center; gap: 8px;">
-                <input type="checkbox" id="serial-command-is-input" />
-                This is an input selection option
-              </label>
+              <label><input type="checkbox" id="serial-command-is-input" style="margin-right: 8px; vertical-align: middle;" />Input selection</label>
+              <small>Check if this selects an input (HDMI 1, HDMI 2, etc.)</small>
             </div>
             <div class="form-group" id="serial-input-value-group" style="display: none;">
               <label>Input Value</label>
@@ -2139,10 +2395,8 @@ class VDAIRControlCard extends HTMLElement {
               <small>The value this input represents (e.g., "1" for HDMI 1)</small>
             </div>
             <div class="form-group">
-              <label style="display: flex; align-items: center; gap: 8px;">
-                <input type="checkbox" id="serial-command-is-query" />
-                This is a query command (for state updates)
-              </label>
+              <label><input type="checkbox" id="serial-command-is-query" style="margin-right: 8px; vertical-align: middle;" />Query command</label>
+              <small>Check if this queries device state</small>
             </div>
             <div class="form-group" id="serial-response-pattern-group" style="display: none;">
               <label>Response Pattern (regex)</label>
@@ -2162,6 +2416,478 @@ class VDAIRControlCard extends HTMLElement {
         </div>
       </div>
     `;
+  }
+
+  _renderEditMatrixIOModal() {
+    const matrixDevice = this._modal?.matrixDevice;
+    if (!matrixDevice) return '';
+
+    const matrixInputs = matrixDevice.matrix_inputs || [];
+    const matrixOutputs = matrixDevice.matrix_outputs || [];
+
+    // Get all controlled devices for the dropdowns
+    const availableDevices = this._devices || [];
+
+    return `
+      <div class="modal" data-action="close-modal">
+        <div class="modal-content" onclick="event.stopPropagation()" style="max-width: 600px;">
+          <div class="modal-header">
+            <h3>Edit Matrix I/O: ${matrixDevice.name}</h3>
+            <button class="modal-close" data-action="close-modal">&times;</button>
+          </div>
+          <div class="modal-body" style="max-height: 70vh; overflow-y: auto;">
+            <p style="color: var(--secondary-text-color); font-size: 12px; margin-bottom: 16px;">
+              Assign source devices to inputs and display devices to outputs. This helps organize your matrix routing.
+            </p>
+
+            <div style="margin-bottom: 24px;">
+              <h4 style="margin: 0 0 12px 0; font-size: 14px; color: var(--primary-text-color);">Inputs (Sources)</h4>
+              <div style="background: var(--secondary-background-color); padding: 12px; border-radius: 8px;">
+                ${matrixInputs.length === 0 ? `
+                  <p style="color: var(--secondary-text-color); font-size: 12px;">No inputs configured for this matrix.</p>
+                ` : matrixInputs.map((input, idx) => `
+                  <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
+                    <span style="min-width: 80px; font-size: 13px;">Input ${input.index}:</span>
+                    <input type="text" class="matrix-input-name-edit" data-index="${input.index}"
+                           value="${input.name || ''}" placeholder="Input ${input.index} name"
+                           style="flex: 1; padding: 6px 10px; border: 1px solid var(--divider-color); border-radius: 4px;" />
+                    <select class="matrix-input-device" data-index="${input.index}"
+                            style="flex: 1; padding: 6px 10px; border: 1px solid var(--divider-color); border-radius: 4px;">
+                      <option value="">-- Unassigned --</option>
+                      ${availableDevices.map(d => `
+                        <option value="${d.device_id}" ${input.device_id === d.device_id ? 'selected' : ''}>${d.name}</option>
+                      `).join('')}
+                    </select>
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+
+            <div>
+              <h4 style="margin: 0 0 12px 0; font-size: 14px; color: var(--primary-text-color);">Outputs (Displays)</h4>
+              <div style="background: var(--secondary-background-color); padding: 12px; border-radius: 8px;">
+                ${matrixOutputs.length === 0 ? `
+                  <p style="color: var(--secondary-text-color); font-size: 12px;">No outputs configured for this matrix.</p>
+                ` : matrixOutputs.map((output, idx) => `
+                  <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
+                    <span style="min-width: 80px; font-size: 13px;">Output ${output.index}:</span>
+                    <input type="text" class="matrix-output-name-edit" data-index="${output.index}"
+                           value="${output.name || ''}" placeholder="Output ${output.index} name"
+                           style="flex: 1; padding: 6px 10px; border: 1px solid var(--divider-color); border-radius: 4px;" />
+                    <select class="matrix-output-device" data-index="${output.index}"
+                            style="flex: 1; padding: 6px 10px; border: 1px solid var(--divider-color); border-radius: 4px;">
+                      <option value="">-- Unassigned --</option>
+                      ${availableDevices.map(d => `
+                        <option value="${d.device_id}" ${output.device_id === d.device_id ? 'selected' : ''}>${d.name}</option>
+                      `).join('')}
+                    </select>
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" data-action="close-modal">Cancel</button>
+            <button class="btn btn-primary" data-action="save-matrix-io">Save</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  async _openEditMatrixModal(deviceId, deviceType) {
+    // Load full device details with matrix_inputs and matrix_outputs
+    try {
+      const endpoint = deviceType === 'network'
+        ? `/api/vda_ir_control/network_devices/${deviceId}`
+        : `/api/vda_ir_control/serial_devices/${deviceId}`;
+
+      // Load matrix device and controlled devices in parallel
+      const [matrixResp, devicesResp] = await Promise.all([
+        fetch(endpoint, {
+          headers: { 'Authorization': `Bearer ${this._hass.auth.data.access_token}` }
+        }),
+        fetch('/api/vda_ir_control/devices', {
+          headers: { 'Authorization': `Bearer ${this._hass.auth.data.access_token}` }
+        })
+      ]);
+
+      if (matrixResp.ok) {
+        const matrixDevice = await matrixResp.json();
+
+        // Get controlled devices that are linked to this matrix
+        let linkedDevices = [];
+        if (devicesResp.ok) {
+          const devicesData = await devicesResp.json();
+          linkedDevices = (devicesData.devices || []).filter(d =>
+            d.matrix_device_id === deviceId
+          );
+        }
+
+        // Merge linked devices into matrix outputs
+        // If a controlled device is linked to an output, set that output's device_id
+        if (matrixDevice.matrix_outputs) {
+          matrixDevice.matrix_outputs = matrixDevice.matrix_outputs.map(output => {
+            // Check if any controlled device is linked to this output
+            const linkedDevice = linkedDevices.find(d =>
+              String(d.matrix_output) === String(output.index)
+            );
+            if (linkedDevice && !output.device_id) {
+              // Use the linked device's ID for this output
+              return { ...output, device_id: linkedDevice.device_id };
+            }
+            return output;
+          });
+        }
+
+        this._modal = {
+          type: 'edit-matrix-io',
+          matrixDevice: matrixDevice,
+          deviceType: deviceType,
+          linkedDevices: linkedDevices  // Store for reference
+        };
+        this._render();
+      } else {
+        console.error('Failed to load matrix device');
+      }
+    } catch (e) {
+      console.error('Failed to load matrix device:', e);
+    }
+  }
+
+  async _saveMatrixIO() {
+    const matrixDevice = this._modal?.matrixDevice;
+    const deviceType = this._modal?.deviceType;
+    if (!matrixDevice) return;
+
+    // Gather updated inputs
+    const matrixInputs = [];
+    this.shadowRoot.querySelectorAll('.matrix-input-device').forEach(select => {
+      const index = parseInt(select.dataset.index);
+      const nameInput = this.shadowRoot.querySelector(`.matrix-input-name-edit[data-index="${index}"]`);
+      matrixInputs.push({
+        index: index,
+        name: nameInput?.value || '',
+        device_id: select.value || null
+      });
+    });
+
+    // Gather updated outputs
+    const matrixOutputs = [];
+    this.shadowRoot.querySelectorAll('.matrix-output-device').forEach(select => {
+      const index = parseInt(select.dataset.index);
+      const nameInput = this.shadowRoot.querySelector(`.matrix-output-name-edit[data-index="${index}"]`);
+      matrixOutputs.push({
+        index: index,
+        name: nameInput?.value || '',
+        device_id: select.value || null
+      });
+    });
+
+    try {
+      const endpoint = deviceType === 'network'
+        ? `/api/vda_ir_control/network_devices/${matrixDevice.device_id}`
+        : `/api/vda_ir_control/serial_devices/${matrixDevice.device_id}`;
+
+      const resp = await fetch(endpoint, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${this._hass.auth.data.access_token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          matrix_inputs: matrixInputs,
+          matrix_outputs: matrixOutputs
+        })
+      });
+
+      if (resp.ok) {
+        this._modal = null;
+        // Reload devices to reflect changes
+        if (deviceType === 'network') {
+          await this._loadNetworkDevices();
+        } else {
+          await this._loadSerialDevices();
+        }
+        this._render();
+      } else {
+        const err = await resp.json();
+        alert('Failed to save: ' + (err.error || 'Unknown error'));
+      }
+    } catch (e) {
+      console.error('Failed to save matrix I/O:', e);
+      alert('Failed to save matrix I/O configuration');
+    }
+  }
+
+  _renderEditDeviceModal() {
+    const device = this._modal?.editDevice;
+    if (!device) return '';
+
+    const boards = this._getBoards();
+    const matrixDevices = [
+      ...this._networkDevices.map(d => ({ ...d, type: 'network' })),
+      ...this._serialDevices.map(d => ({ ...d, type: 'serial' })),
+    ];
+
+    const hasMatrixLink = device.matrix_device_id ? true : false;
+
+    return `
+      <div class="modal" data-action="close-modal">
+        <div class="modal-content" onclick="event.stopPropagation()">
+          <div class="modal-title">Edit Device: ${device.name}</div>
+
+          <div class="form-group">
+            <label>Device ID</label>
+            <input type="text" id="edit-device-id" value="${device.device_id}" disabled style="background: var(--secondary-background-color);">
+            <small>Device ID cannot be changed</small>
+          </div>
+
+          <div class="form-group">
+            <label>Device Name</label>
+            <input type="text" id="edit-device-name" value="${device.name}" placeholder="e.g., Bar TV 1">
+          </div>
+
+          <div class="form-group">
+            <label>Location</label>
+            <input type="text" id="edit-device-location" value="${device.location || ''}" placeholder="e.g., Bar Area">
+          </div>
+
+          <div class="form-group">
+            <label>Profile</label>
+            <select id="edit-device-profile">
+              ${this._builtinProfiles.length > 0 ? `
+                <optgroup label="Built-in Profiles">
+                  ${this._builtinProfiles.map(p => `
+                    <option value="builtin:${p.profile_id}" ${device.device_profile_id === `builtin:${p.profile_id}` ? 'selected' : ''}>${p.name} (${p.manufacturer})</option>
+                  `).join('')}
+                </optgroup>
+              ` : ''}
+              ${this._profiles.length > 0 ? `
+                <optgroup label="My Custom Profiles">
+                  ${this._profiles.map(p => `
+                    <option value="${p.profile_id}" ${device.device_profile_id === p.profile_id ? 'selected' : ''}>${p.name}</option>
+                  `).join('')}
+                </optgroup>
+              ` : ''}
+            </select>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label>Board</label>
+              <select id="edit-device-board" data-action="edit-device-board-changed">
+                ${boards.map(b => `
+                  <option value="${b.board_id}" ${device.board_id === b.board_id ? 'selected' : ''}>${b.board_name}</option>
+                `).join('')}
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Output Port</label>
+              ${this._deviceOutputPorts.length > 0 ? `
+                <select id="edit-device-port">
+                  ${this._deviceOutputPorts.map(p => `
+                    <option value="${p.port}" ${device.output_port === p.port ? 'selected' : ''}>${p.gpio_name || 'GPIO' + p.gpio} - ${p.name || 'Unnamed'}</option>
+                  `).join('')}
+                </select>
+              ` : `
+                <select id="edit-device-port" disabled>
+                  <option value="${device.output_port}">Port ${device.output_port}</option>
+                </select>
+              `}
+            </div>
+          </div>
+
+          <!-- Matrix Link Section -->
+          <div style="margin-top: 16px; padding: 12px; background: var(--secondary-background-color, #f5f5f5); border-radius: 8px;">
+            <div class="form-group" style="margin-bottom: 8px;">
+              <label><input type="checkbox" id="edit-device-link-matrix" ${hasMatrixLink ? 'checked' : ''} style="margin-right: 8px; vertical-align: middle;" />Link to HDMI Matrix</label>
+              <small>Link this device to an HDMI matrix output for input selection</small>
+            </div>
+            <div id="edit-matrix-link-options" style="display: ${hasMatrixLink ? 'block' : 'none'};">
+              <div class="form-group">
+                <label>Matrix Device</label>
+                <select id="edit-device-matrix-id">
+                  <option value="">Select a matrix...</option>
+                  ${matrixDevices.map(d => `
+                    <option value="${d.device_id}" data-type="${d.type}" ${device.matrix_device_id === d.device_id ? 'selected' : ''}>${d.name} (${d.type === 'network' ? 'Network' : 'Serial'})</option>
+                  `).join('')}
+                </select>
+              </div>
+              <div class="form-group">
+                <label>Matrix Output</label>
+                <select id="edit-device-matrix-output">
+                  ${this._modal?.matrixOutputOptions ? this._modal.matrixOutputOptions.map(o => `
+                    <option value="${o.value}" ${device.matrix_output === o.value ? 'selected' : ''}>${o.label}</option>
+                  `).join('') : `<option value="${device.matrix_output || ''}">Output ${device.matrix_output || '?'}</option>`}
+                </select>
+                <small>Which matrix output is this device connected to?</small>
+              </div>
+            </div>
+          </div>
+
+          <div class="modal-actions">
+            <button class="btn btn-secondary" data-action="close-modal">Cancel</button>
+            <button class="btn btn-primary" data-action="update-device">Save Changes</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  async _openEditDeviceModal(deviceId) {
+    const device = this._devices.find(d => d.device_id === deviceId);
+    if (!device) {
+      console.error('Device not found:', deviceId);
+      return;
+    }
+
+    // Load output ports for the device's board
+    this._deviceOutputPorts = [];
+    if (device.board_id) {
+      await this._loadDeviceOutputPorts(device.board_id);
+    }
+
+    // Load matrix output options if linked to a matrix
+    let matrixOutputOptions = null;
+    if (device.matrix_device_id) {
+      try {
+        const endpoint = device.matrix_device_type === 'network'
+          ? `/api/vda_ir_control/network_devices/${device.matrix_device_id}`
+          : `/api/vda_ir_control/serial_devices/${device.matrix_device_id}`;
+
+        const resp = await fetch(endpoint, {
+          headers: { 'Authorization': `Bearer ${this._hass.auth.data.access_token}` }
+        });
+
+        if (resp.ok) {
+          const matrixDevice = await resp.json();
+          const outputs = matrixDevice.matrix_outputs || [];
+          matrixOutputOptions = outputs.map(o => ({
+            value: String(o.index),
+            label: o.name || `Output ${o.index}`
+          }));
+        }
+      } catch (e) {
+        console.error('Failed to load matrix outputs:', e);
+      }
+    }
+
+    this._modal = {
+      type: 'edit-device',
+      editDevice: device,
+      matrixOutputOptions: matrixOutputOptions
+    };
+    this._render();
+
+    // Add event listener for matrix link checkbox after render
+    setTimeout(() => {
+      const checkbox = this.shadowRoot.getElementById('edit-device-link-matrix');
+      const optionsDiv = this.shadowRoot.getElementById('edit-matrix-link-options');
+      if (checkbox && optionsDiv) {
+        checkbox.addEventListener('change', (e) => {
+          optionsDiv.style.display = e.target.checked ? 'block' : 'none';
+        });
+      }
+
+      // Add listener for matrix device change to update outputs
+      const matrixSelect = this.shadowRoot.getElementById('edit-device-matrix-id');
+      if (matrixSelect) {
+        matrixSelect.addEventListener('change', async (e) => {
+          await this._updateEditMatrixOutputOptions(e.target.value, e.target.options[e.target.selectedIndex]?.dataset.type);
+        });
+      }
+    }, 0);
+  }
+
+  async _updateEditMatrixOutputOptions(matrixDeviceId, matrixType) {
+    const outputSelect = this.shadowRoot.getElementById('edit-device-matrix-output');
+    if (!outputSelect) return;
+
+    if (!matrixDeviceId) {
+      outputSelect.innerHTML = '<option value="">Select matrix first...</option>';
+      return;
+    }
+
+    try {
+      const endpoint = matrixType === 'network'
+        ? `/api/vda_ir_control/network_devices/${matrixDeviceId}`
+        : `/api/vda_ir_control/serial_devices/${matrixDeviceId}`;
+
+      const resp = await fetch(endpoint, {
+        headers: { 'Authorization': `Bearer ${this._hass.auth.data.access_token}` }
+      });
+
+      if (resp.ok) {
+        const device = await resp.json();
+        const outputs = device.matrix_outputs || [];
+        if (outputs.length > 0) {
+          outputSelect.innerHTML = outputs.map(o => `
+            <option value="${o.index}">${o.name || 'Output ' + o.index}</option>
+          `).join('');
+        } else {
+          // Default to 8 outputs
+          outputSelect.innerHTML = Array.from({length: 8}, (_, i) => `
+            <option value="${i+1}">Output ${i+1}</option>
+          `).join('');
+        }
+      }
+    } catch (e) {
+      console.error('Failed to fetch matrix outputs:', e);
+    }
+  }
+
+  async _updateDevice() {
+    const device = this._modal?.editDevice;
+    if (!device) return;
+
+    const name = this.shadowRoot.getElementById('edit-device-name')?.value?.trim();
+    const location = this.shadowRoot.getElementById('edit-device-location')?.value?.trim();
+    const profileId = this.shadowRoot.getElementById('edit-device-profile')?.value;
+    const boardId = this.shadowRoot.getElementById('edit-device-board')?.value;
+    const port = parseInt(this.shadowRoot.getElementById('edit-device-port')?.value) || 0;
+
+    // Matrix link fields
+    const linkMatrix = this.shadowRoot.getElementById('edit-device-link-matrix')?.checked;
+    const matrixIdSelect = this.shadowRoot.getElementById('edit-device-matrix-id');
+    const matrixOutputSelect = this.shadowRoot.getElementById('edit-device-matrix-output');
+
+    if (!name) {
+      alert('Device name is required');
+      return;
+    }
+
+    const serviceData = {
+      device_id: device.device_id,
+      name: name,
+      location: location || '',
+      device_profile_id: profileId,
+      board_id: boardId,
+      output_port: port,
+    };
+
+    // Add matrix link data if enabled
+    if (linkMatrix && matrixIdSelect && matrixIdSelect.value) {
+      const selectedOption = matrixIdSelect.options[matrixIdSelect.selectedIndex];
+      serviceData.matrix_device_id = matrixIdSelect.value;
+      serviceData.matrix_device_type = selectedOption.dataset.type;
+      serviceData.matrix_output = matrixOutputSelect ? matrixOutputSelect.value : null;
+    } else {
+      // Clear matrix link
+      serviceData.matrix_device_id = null;
+      serviceData.matrix_device_type = null;
+      serviceData.matrix_output = null;
+    }
+
+    try {
+      await this._hass.callService('vda_ir_control', 'update_device', serviceData);
+      this._modal = null;
+      await this._loadDevices();
+      this._render();
+    } catch (e) {
+      console.error('Failed to update device:', e);
+      alert('Failed to update device: ' + e.message);
+    }
   }
 
   _attachEventListeners() {
@@ -2260,12 +2986,31 @@ class VDAIRControlCard extends HTMLElement {
         this._render();
         break;
 
+      case 'toggle-matrix-link':
+        const matrixOptions = this.shadowRoot.getElementById('matrix-link-options');
+        if (matrixOptions) {
+          matrixOptions.style.display = e.target.checked ? 'block' : 'none';
+        }
+        break;
+
+      case 'matrix-device-changed':
+        await this._updateMatrixOutputOptions(e.target.value);
+        break;
+
       case 'save-device':
         await this._saveDevice();
         break;
 
       case 'delete-device':
         await this._deleteDevice(e.target.dataset.deviceId);
+        break;
+
+      case 'edit-device':
+        await this._openEditDeviceModal(e.target.dataset.deviceId);
+        break;
+
+      case 'update-device':
+        await this._updateDevice();
         break;
 
       case 'test-device':
@@ -2319,7 +3064,8 @@ class VDAIRControlCard extends HTMLElement {
         break;
 
       case 'edit-network-device':
-        this._selectedNetworkDevice = e.target.dataset.deviceId;
+        e.stopPropagation();
+        this._selectedNetworkDevice = e.target.closest('[data-device-id]').dataset.deviceId;
         const details = await this._loadNetworkDevice(this._selectedNetworkDevice);
         if (details) {
           const index = this._networkDevices.findIndex(d => d.device_id === this._selectedNetworkDevice);
@@ -2331,13 +3077,22 @@ class VDAIRControlCard extends HTMLElement {
         break;
 
       case 'delete-network-device':
+        e.stopPropagation();
         if (confirm('Are you sure you want to delete this network device?')) {
-          await this._deleteNetworkDevice(e.target.dataset.deviceId);
+          await this._deleteNetworkDevice(e.target.closest('[data-device-id]').dataset.deviceId);
         }
         break;
 
       case 'test-connection':
         await this._testNetworkConnection();
+        break;
+
+      case 'network-device-type-changed':
+        this._toggleMatrixConfigSection(e.target.value);
+        break;
+
+      case 'matrix-config-changed':
+        this._updateMatrixIONames();
         break;
 
       case 'save-network-device':
@@ -2380,7 +3135,19 @@ class VDAIRControlCard extends HTMLElement {
         break;
 
       case 'test-network-device':
-        await this._testNetworkDevice(e.target.dataset.deviceId);
+        e.stopPropagation();
+        await this._testNetworkDevice(e.target.closest('[data-device-id]').dataset.deviceId);
+        break;
+
+      case 'edit-matrix-io':
+        e.stopPropagation();
+        const matrixDeviceId = e.target.closest('[data-device-id]').dataset.deviceId;
+        const matrixDeviceType = e.target.dataset.deviceType; // 'network' or 'serial'
+        await this._openEditMatrixModal(matrixDeviceId, matrixDeviceType);
+        break;
+
+      case 'save-matrix-io':
+        await this._saveMatrixIO();
         break;
 
       // Serial device actions
@@ -2420,7 +3187,8 @@ class VDAIRControlCard extends HTMLElement {
         break;
 
       case 'edit-serial-device':
-        this._selectedSerialDevice = e.target.dataset.deviceId;
+        e.stopPropagation();
+        this._selectedSerialDevice = e.target.closest('[data-device-id]').dataset.deviceId;
         const serialDet = await this._loadSerialDevice(this._selectedSerialDevice);
         if (serialDet) {
           const index = this._serialDevices.findIndex(d => d.device_id === this._selectedSerialDevice);
@@ -2432,8 +3200,9 @@ class VDAIRControlCard extends HTMLElement {
         break;
 
       case 'delete-serial-device':
+        e.stopPropagation();
         if (confirm('Are you sure you want to delete this serial device?')) {
-          await this._deleteSerialDevice(e.target.dataset.deviceId);
+          await this._deleteSerialDevice(e.target.closest('[data-device-id]').dataset.deviceId);
         }
         break;
 
@@ -2477,7 +3246,8 @@ class VDAIRControlCard extends HTMLElement {
         break;
 
       case 'test-serial-device':
-        await this._testSerialDevice(e.target.dataset.deviceId);
+        e.stopPropagation();
+        await this._testSerialDevice(e.target.closest('[data-device-id]').dataset.deviceId);
         break;
     }
   }
@@ -2653,6 +3423,12 @@ class VDAIRControlCard extends HTMLElement {
     const portSelect = this.shadowRoot.getElementById('device-port');
     const port = parseInt(portSelect.value);
 
+    // Matrix link fields
+    const linkMatrixCheckbox = this.shadowRoot.getElementById('device-link-matrix');
+    const linkMatrix = linkMatrixCheckbox ? linkMatrixCheckbox.checked : false;
+    const matrixIdSelect = this.shadowRoot.getElementById('device-matrix-id');
+    const matrixOutputSelect = this.shadowRoot.getElementById('device-matrix-output');
+
     if (!deviceId || !name || !profileId || !boardId) {
       alert('Please fill in all required fields');
       return;
@@ -2663,15 +3439,26 @@ class VDAIRControlCard extends HTMLElement {
       return;
     }
 
+    // Build service data
+    const serviceData = {
+      device_id: deviceId,
+      name: name,
+      location: location,
+      profile_id: profileId,
+      board_id: boardId,
+      output_port: port,
+    };
+
+    // Add matrix link data if enabled
+    if (linkMatrix && matrixIdSelect && matrixIdSelect.value) {
+      const selectedOption = matrixIdSelect.options[matrixIdSelect.selectedIndex];
+      serviceData.matrix_device_id = matrixIdSelect.value;
+      serviceData.matrix_device_type = selectedOption.dataset.type;
+      serviceData.matrix_output = matrixOutputSelect ? matrixOutputSelect.value : null;
+    }
+
     try {
-      await this._hass.callService('vda_ir_control', 'create_device', {
-        device_id: deviceId,
-        name: name,
-        location: location,
-        profile_id: profileId,
-        board_id: boardId,
-        output_port: port,
-      });
+      await this._hass.callService('vda_ir_control', 'create_device', serviceData);
       this._modal = null;
       await this._loadDevices();
       this._render();
@@ -2770,6 +3557,9 @@ class VDAIRControlCard extends HTMLElement {
       return;
     }
 
+    // Get matrix configuration if applicable
+    const matrixConfig = this._getMatrixConfig();
+
     try {
       const resp = await fetch('/api/vda_ir_control/network_devices', {
         method: 'POST',
@@ -2785,6 +3575,7 @@ class VDAIRControlCard extends HTMLElement {
           protocol,
           device_type: deviceType,
           location,
+          matrix_config: matrixConfig,
         }),
       });
 

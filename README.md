@@ -36,14 +36,14 @@ Download the pre-built firmware for your board from [Releases](https://github.co
 
 | Board | Firmware File | Size |
 |-------|---------------|------|
-| Olimex ESP32-POE-ISO | [`firmware-esp32-poe-iso.bin`](https://github.com/vda-solutions/vda-ir-control/releases/latest/download/firmware-esp32-poe-iso.bin) | ~1020 KB |
-| ESP32 DevKit (WiFi) | [`firmware-esp32-devkit-wifi.bin`](https://github.com/vda-solutions/vda-ir-control/releases/latest/download/firmware-esp32-devkit-wifi.bin) | ~993 KB |
+| Olimex ESP32-POE-ISO | [`firmware-esp32-poe-iso-v1.2.0.bin`](https://github.com/vda-solutions/vda-ir-control/releases/latest/download/firmware-esp32-poe-iso-v1.2.0.bin) | ~1020 KB |
+| ESP32 DevKit (WiFi) | [`firmware-esp32-devkit-wifi-v1.2.0.bin`](https://github.com/vda-solutions/vda-ir-control/releases/latest/download/firmware-esp32-devkit-wifi-v1.2.0.bin) | ~993 KB |
 
 Flash using [esptool](https://github.com/espressif/esptool):
 ```bash
 pip install esptool
 esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 921600 \
-  write_flash -z 0x0 firmware-esp32-devkit-wifi.bin
+  write_flash -z 0x0 firmware-esp32-devkit-wifi-v1.2.0.bin
 ```
 
 > **Note**: The firmware binary includes bootloader and partition table - flash to address `0x0`.

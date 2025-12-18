@@ -1,15 +1,12 @@
 """VDA IR Control integration for Home Assistant."""
 
 import logging
-from pathlib import Path
 from typing import Final
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
-from homeassistant.components.frontend import async_register_built_in_panel
-from homeassistant.components.http import StaticPathConfig
 
 from .const import DOMAIN
 from .coordinator import VDAIRBoardCoordinator
@@ -22,11 +19,6 @@ from .profile_manager import get_profile_manager
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
 PLATFORMS: Final = [Platform.SWITCH, Platform.BUTTON, Platform.SELECT]
-
-# Frontend paths
-FRONTEND_DIR = Path(__file__).parent / "frontend"
-ADMIN_CARD_URL = f"/{DOMAIN}/vda-ir-control-card.js"
-REMOTE_CARD_URL = f"/{DOMAIN}/vda-ir-remote-card.js"
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
@@ -46,9 +38,6 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
     # Register REST API
     await async_setup_api(hass)
-
-    # Register frontend resources
-    await _async_register_frontend(hass)
 
     # Initialize network device coordinators
     await _async_setup_network_devices(hass)
@@ -71,28 +60,6 @@ async def _async_setup_network_devices(hass: HomeAssistant) -> None:
                 device.name,
                 err,
             )
-
-
-async def _async_register_frontend(hass: HomeAssistant) -> None:
-    """Register frontend resources."""
-    # Register static path for frontend files
-    await hass.http.async_register_static_paths([
-        StaticPathConfig(
-            f"/{DOMAIN}",
-            str(FRONTEND_DIR),
-            cache_headers=False,
-        )
-    ])
-
-    # Register the cards as Lovelace resources
-    # Users need to add these to their Lovelace resources manually or via UI
-    _LOGGER.info(
-        "VDA IR Control frontend registered. Add these resources to Lovelace:\n"
-        "  Admin Card: %s\n"
-        "  Remote Card: %s",
-        ADMIN_CARD_URL,
-        REMOTE_CARD_URL,
-    )
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

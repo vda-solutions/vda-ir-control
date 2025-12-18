@@ -446,8 +446,8 @@ BUILTIN_PROFILES: List[Dict[str, Any]] = [
         "name": "Pioneer AV Receiver (Generic)",
         "manufacturer": "Pioneer",
         "device_type": "av_receiver",
-        "protocol": "NEC",
-        "bits": 32,
+        "protocol": "PIONEER",
+        "bits": 64,
         "codes": {
             # Power
             "power": "A55A38C7",
@@ -508,8 +508,8 @@ BUILTIN_PROFILES: List[Dict[str, Any]] = [
         "name": "Pioneer Elite AV Receiver",
         "manufacturer": "Pioneer",
         "device_type": "av_receiver",
-        "protocol": "NEC",
-        "bits": 32,
+        "protocol": "PIONEER",
+        "bits": 64,
         "codes": {
             # Power
             "power": "A55A38C7",

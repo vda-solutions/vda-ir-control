@@ -181,7 +181,7 @@ void setup() {
   setLedState(LED_BLINK_SLOW);  // Indicate booting
 
   Serial.println("\n\n========================================");
-  Serial.println("   VDA IR Control Firmware v1.2.0");
+  Serial.println("   VDA IR Control Firmware v1.2.1");
 #ifdef USE_ETHERNET
   Serial.println("   Mode: Ethernet (ESP32-POE-ISO)");
 #else
@@ -1036,7 +1036,7 @@ void handleInfo() {
   doc["board_name"] = boardName;
   doc["mac_address"] = getMacAddress();
   doc["ip_address"] = getLocalIP();
-  doc["firmware_version"] = "1.2.0";
+  doc["firmware_version"] = "1.2.1";
   doc["adopted"] = adopted;
   doc["total_ports"] = portCount;
 
@@ -1267,6 +1267,8 @@ void handleSendIR() {
     irSenders[portIndex]->sendLG(codeValue);
   } else if (protocol == "panasonic") {
     irSenders[portIndex]->sendPanasonic(0x4004, codeValue);  // Standard Panasonic address
+  } else if (protocol == "pioneer") {
+    irSenders[portIndex]->sendPioneer(codeValue);  // Pioneer uses 40kHz, different timing
   } else {
     // Send as raw NEC by default
     irSenders[portIndex]->sendNEC(codeValue);

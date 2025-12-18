@@ -437,6 +437,142 @@ BUILTIN_PROFILES: List[Dict[str, Any]] = [
             "input": "220C",
         }
     },
+
+    # ==================== AV RECEIVERS ====================
+
+    # Pioneer AV Receiver (VSX series and similar)
+    {
+        "profile_id": "pioneer_avr_generic",
+        "name": "Pioneer AV Receiver (Generic)",
+        "manufacturer": "Pioneer",
+        "device_type": "av_receiver",
+        "protocol": "NEC",
+        "bits": 32,
+        "codes": {
+            # Power
+            "power": "A55A38C7",
+            "power_on": "A55A39C6",
+            "power_off": "A55A3AC5",
+            # Volume
+            "volume_up": "A55A50AF",
+            "volume_down": "A55AD02F",
+            "mute": "A55A48B7",
+            # Input selection
+            "input_bd": "A55A4AB5",       # Blu-ray/DVD
+            "input_dvd": "A55A4AB5",      # DVD (same as BD on most models)
+            "input_tv": "A55AC936",       # TV audio
+            "input_sat": "A55A8976",      # SAT/CBL
+            "input_hdmi1": "A55AE51A",
+            "input_hdmi2": "A55A15EA",
+            "input_hdmi3": "A55A55AA",
+            "input_hdmi4": "A55AB54A",
+            "input_hdmi5": "A55A35CA",
+            "input_hdmi6": "A55A758A",
+            "input_video": "A55A0AF5",
+            "input_cd": "A55AA05F",
+            "input_tuner": "A55A609F",
+            "input_usb": "A55A7986",
+            "input_bluetooth": "A55AF906",
+            "input_network": "A55AEB14",  # Network/streaming
+            # Surround modes
+            "surround_auto": "A55A58A7",
+            "surround_stereo": "A55A9867",
+            "surround_standard": "A55AD827",
+            "surround_advanced": "A55AA857",
+            "surround_action": "A55A6897",
+            "surround_drama": "A55AE817",
+            "surround_direct": "A55AA25D",
+            # Navigation
+            "up": "A55A01FE",
+            "down": "A55A817E",
+            "left": "A55A41BE",
+            "right": "A55AC13E",
+            "enter": "A55A21DE",
+            "return": "A55A11EE",
+            "home": "A55AD12E",
+            "menu": "A55AE916",
+            # Audio adjustments
+            "tone": "A55A8A75",
+            "mcacc": "A55A22DD",           # MCACC room calibration
+            "listening_mode": "A55A0CF3",
+            "sound_retriever": "A55ACA35",
+            # Display
+            "display": "A55A20DF",
+            "dimmer": "A55AE01F",
+        }
+    },
+
+    # Pioneer Elite AV Receiver (SC series)
+    {
+        "profile_id": "pioneer_elite_avr",
+        "name": "Pioneer Elite AV Receiver",
+        "manufacturer": "Pioneer",
+        "device_type": "av_receiver",
+        "protocol": "NEC",
+        "bits": 32,
+        "codes": {
+            # Power
+            "power": "A55A38C7",
+            "power_on": "A55A39C6",
+            "power_off": "A55A3AC5",
+            # Volume
+            "volume_up": "A55A50AF",
+            "volume_down": "A55AD02F",
+            "mute": "A55A48B7",
+            # Input selection (Elite models have more HDMI inputs)
+            "input_bd": "A55A4AB5",
+            "input_dvd": "A55A4AB5",
+            "input_tv": "A55AC936",
+            "input_sat": "A55A8976",
+            "input_hdmi1": "A55AE51A",
+            "input_hdmi2": "A55A15EA",
+            "input_hdmi3": "A55A55AA",
+            "input_hdmi4": "A55AB54A",
+            "input_hdmi5": "A55A35CA",
+            "input_hdmi6": "A55A758A",
+            "input_hdmi7": "A55AF50A",
+            "input_cd": "A55AA05F",
+            "input_phono": "A55A20DF",
+            "input_tuner": "A55A609F",
+            "input_usb": "A55A7986",
+            "input_bluetooth": "A55AF906",
+            "input_network": "A55AEB14",
+            "input_multi_zone": "A55A29D6",
+            # Surround modes
+            "surround_auto": "A55A58A7",
+            "surround_stereo": "A55A9867",
+            "surround_direct": "A55AA25D",
+            "surround_pure_direct": "A55A629D",
+            "surround_standard": "A55AD827",
+            "surround_advanced": "A55AA857",
+            # Navigation
+            "up": "A55A01FE",
+            "down": "A55A817E",
+            "left": "A55A41BE",
+            "right": "A55AC13E",
+            "enter": "A55A21DE",
+            "return": "A55A11EE",
+            "home": "A55AD12E",
+            "menu": "A55AE916",
+            # Zone 2
+            "zone2_power": "A55AB847",
+            "zone2_volume_up": "A55A0FF0",
+            "zone2_volume_down": "A55A8F70",
+            "zone2_mute": "A55A4FB0",
+            # Zone 3
+            "zone3_power": "A55A7887",
+            "zone3_volume_up": "A55ACF30",
+            "zone3_volume_down": "A55A2FD0",
+            # Audio adjustments
+            "mcacc": "A55A22DD",
+            "phase_control": "A55A9A65",
+            "sound_retriever": "A55ACA35",
+            "dialog_enhancement": "A55A12ED",
+            # Display
+            "display": "A55A20DF",
+            "dimmer": "A55AE01F",
+        }
+    },
 ]
 
 

@@ -17,7 +17,7 @@ from typing import Dict, List, Any
 #     "profile_id": "unique_id",
 #     "name": "Display Name",
 #     "manufacturer": "Brand",
-#     "device_type": "tv" | "cable_box" | "soundbar" | "streaming",
+#     "device_type": "tv" | "cable_box" | "soundbar" | "streaming" | "av_receiver" | "projector" | "blu_ray" | "gaming" | "fan" | "ac" | "lighting",
 #     "protocol": "SAMSUNG" | "NEC" | "SONY" | etc,
 #     "bits": 32,  # Protocol bit length
 #     "codes": {

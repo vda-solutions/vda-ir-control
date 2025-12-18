@@ -23,6 +23,7 @@ from .models import (
 )
 from .storage import get_storage
 from .ir_profiles import get_profile_by_id as get_builtin_profile
+from .profile_manager import get_profile_manager
 from .network_coordinator import (
     get_network_coordinator,
     async_setup_network_coordinator,
@@ -582,15 +583,24 @@ async def async_setup_services(hass: HomeAssistant) -> None:
     async def handle_create_device(call: ServiceCall) -> Dict[str, Any]:
         """Handle create_device service."""
         storage = get_storage(hass)
+        profile_manager = get_profile_manager(hass)
+        await profile_manager.async_load()
         profile_id = call.data["profile_id"]
 
-        # Check if it's a built-in profile (prefixed with "builtin:")
+        # Check profile source based on prefix
         if profile_id.startswith("builtin:"):
             builtin_id = profile_id[8:]  # Remove "builtin:" prefix
             builtin_profile = get_builtin_profile(builtin_id)
             if builtin_profile is None:
                 raise ServiceValidationError(f"Built-in profile '{builtin_id}' not found")
             # Use the builtin profile ID as-is
+            device_profile_id = profile_id
+        elif profile_id.startswith("community:"):
+            community_id = profile_id[10:]  # Remove "community:" prefix
+            community_profile = profile_manager.get_community_profile(community_id)
+            if community_profile is None:
+                raise ServiceValidationError(f"Community profile '{community_id}' not found")
+            # Use the community profile ID as-is
             device_profile_id = profile_id
         else:
             # Verify user profile exists
@@ -672,12 +682,19 @@ async def async_setup_services(hass: HomeAssistant) -> None:
             device.location = call.data["location"] or ""
         if "device_profile_id" in call.data:
             profile_id = call.data["device_profile_id"]
-            # Validate profile exists
+            # Validate profile exists based on prefix
             if profile_id.startswith("builtin:"):
                 builtin_id = profile_id[8:]
                 builtin_profile = get_builtin_profile(builtin_id)
                 if builtin_profile is None:
                     raise ServiceValidationError(f"Built-in profile '{builtin_id}' not found")
+            elif profile_id.startswith("community:"):
+                community_id = profile_id[10:]
+                profile_manager = get_profile_manager(hass)
+                await profile_manager.async_load()
+                community_profile = profile_manager.get_community_profile(community_id)
+                if community_profile is None:
+                    raise ServiceValidationError(f"Community profile '{community_id}' not found")
             else:
                 profile = await storage.async_get_profile(profile_id)
                 if profile is None:
@@ -741,7 +758,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         if device is None:
             raise ServiceValidationError(f"Device '{device_id}' not found")
 
-        # Check if using a built-in profile
+        # Get IR code based on profile source (builtin, community, or user)
         profile_id = device.device_profile_id
         ir_code_data = None
         protocol = None
@@ -759,6 +776,23 @@ async def async_setup_services(hass: HomeAssistant) -> None:
 
             ir_code_data = codes[command]
             protocol = builtin_profile.get("protocol", "NEC")
+
+        elif profile_id.startswith("community:"):
+            community_id = profile_id[10:]  # Remove "community:" prefix
+            profile_manager = get_profile_manager(hass)
+            await profile_manager.async_load()
+            community_profile = profile_manager.get_community_profile(community_id)
+            if community_profile is None:
+                raise ServiceValidationError(f"Community profile '{community_id}' not found")
+
+            # Get IR code from community profile (same format as built-in)
+            codes = community_profile.get("codes", {})
+            if command not in codes:
+                raise ServiceValidationError(f"Command '{command}' not found in community profile")
+
+            ir_code_data = codes[command]
+            protocol = community_profile.get("protocol", "NEC")
+
         else:
             # Get user profile
             profile = await storage.async_get_profile(profile_id)

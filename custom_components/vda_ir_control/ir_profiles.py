@@ -316,7 +316,31 @@ BUILTIN_PROFILES: List[Dict[str, Any]] = [
 
     # ==================== STREAMING DEVICES ====================
 
-    # Apple TV
+    # Apple TV 4K (2021+) - Device 229, Pair ID 254
+    # Format: NEC with address E5FE (229 + 254)
+    {
+        "profile_id": "apple_tv_4k",
+        "name": "Apple TV 4K",
+        "manufacturer": "Apple",
+        "device_type": "streaming",
+        "protocol": "NEC",
+        "bits": 32,
+        "codes": {
+            "up": "E5FE03FC",
+            "down": "E5FE04FB",
+            "left": "E5FE05FA",
+            "right": "E5FE06F9",
+            "select": "E5FE07F8",
+            "menu": "E5FE01FE",
+            "home": "E5FE20DF",
+            "play_pause": "E5FE0CF3",
+            "play": "E5FE0AF5",
+            "pause": "E5FE0BF4",
+            "power_on": "E5FE15EA",
+            "power_off": "E5FE16E9",
+        }
+    },
+    # Apple TV (older silver remote)
     {
         "profile_id": "apple_tv",
         "name": "Apple TV",
@@ -329,9 +353,9 @@ BUILTIN_PROFILES: List[Dict[str, Any]] = [
             "up": "77E15020",
             "down": "77E130D0",
             "left": "77E11090",
-            "right": "77E1E010",
-            "select": "77E1BA45",
-            "play_pause": "77E17A85",
+            "right": "77E16010",
+            "select": "77E13A20",
+            "play_pause": "77E1FA20",
         }
     },
 

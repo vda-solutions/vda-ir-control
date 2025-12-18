@@ -27,6 +27,7 @@ from .ir_profiles import (
     get_available_manufacturers,
     get_available_device_types,
 )
+from .profile_manager import get_profile_manager
 from .models import NetworkDevice, NetworkConfig, SerialDevice, SerialConfig, DeviceCommand, ResponsePattern
 from .network_coordinator import (
     get_network_coordinator,
@@ -389,6 +390,198 @@ class VDAIRBuiltinProfileView(HomeAssistantView):
             return self.json({"error": "Profile not found"}, status_code=404)
 
         return self.json(profile)
+
+
+# ============================================================================
+# COMMUNITY PROFILE API ENDPOINTS
+# ============================================================================
+
+
+class VDAIRCommunityProfilesView(HomeAssistantView):
+    """API endpoint for community IR profiles (synced from GitHub)."""
+
+    url = "/api/vda_ir_control/community_profiles"
+    name = "api:vda_ir_control:community_profiles"
+    requires_auth = True
+
+    async def get(self, request):
+        """Get all cached community profiles.
+
+        Returns profiles synced from the community GitHub repository.
+        """
+        hass = request.app["hass"]
+        manager = get_profile_manager(hass)
+        await manager.async_load()
+
+        profiles = manager.get_all_community_profiles()
+        status = manager.get_sync_status()
+
+        return self.json({
+            "profiles": profiles,
+            "total": len(profiles),
+            "last_sync": status.get("last_sync"),
+            "manifest_version": status.get("manifest_version"),
+            "repository_url": status.get("repository_url"),
+        })
+
+
+class VDAIRCommunityProfileView(HomeAssistantView):
+    """API endpoint for a single community profile."""
+
+    url = "/api/vda_ir_control/community_profiles/{profile_id}"
+    name = "api:vda_ir_control:community_profile"
+    requires_auth = True
+
+    async def get(self, request, profile_id):
+        """Get a specific community profile by ID."""
+        hass = request.app["hass"]
+        manager = get_profile_manager(hass)
+        await manager.async_load()
+
+        profile = manager.get_community_profile(profile_id)
+        if profile is None:
+            return self.json({"error": "Profile not found"}, status_code=404)
+
+        return self.json(profile)
+
+
+class VDAIRSyncProfilesView(HomeAssistantView):
+    """API endpoint for syncing community profiles from GitHub."""
+
+    url = "/api/vda_ir_control/sync_profiles"
+    name = "api:vda_ir_control:sync_profiles"
+    requires_auth = True
+
+    async def post(self, request):
+        """Trigger sync of community profiles from GitHub.
+
+        Downloads the manifest and all profiles from the community repository.
+        Uses ETag for conditional requests to respect GitHub API rate limits.
+        """
+        hass = request.app["hass"]
+        manager = get_profile_manager(hass)
+
+        _LOGGER.info("Starting community profile sync")
+        result = await manager.async_sync_community_profiles()
+
+        if result["success"]:
+            _LOGGER.info(
+                "Community profile sync completed: %s",
+                result["message"]
+            )
+        else:
+            _LOGGER.warning(
+                "Community profile sync failed: %s",
+                result["message"]
+            )
+
+        return self.json(result)
+
+    async def get(self, request):
+        """Get sync status without triggering a sync."""
+        hass = request.app["hass"]
+        manager = get_profile_manager(hass)
+        await manager.async_load()
+
+        status = manager.get_sync_status()
+        return self.json(status)
+
+
+class VDAIRExportProfileView(HomeAssistantView):
+    """API endpoint for exporting a user profile for contribution."""
+
+    url = "/api/vda_ir_control/export_profile/{profile_id}"
+    name = "api:vda_ir_control:export_profile"
+    requires_auth = True
+
+    async def get(self, request, profile_id):
+        """Export a user profile as JSON for contribution to the community repo.
+
+        Returns the profile formatted according to the community repository schema,
+        along with a link to submit a contribution.
+        """
+        hass = request.app["hass"]
+        storage = get_storage(hass)
+
+        profile = await storage.async_get_profile(profile_id)
+        if profile is None:
+            return self.json({"error": "Profile not found"}, status_code=404)
+
+        manager = get_profile_manager(hass)
+        export_result = manager.export_profile_for_contribution(profile.to_dict())
+
+        return self.json({
+            "profile_id": profile_id,
+            "profile_name": profile.name,
+            **export_result,
+        })
+
+
+class VDAIRAllProfilesView(HomeAssistantView):
+    """API endpoint for all profiles merged from all sources."""
+
+    url = "/api/vda_ir_control/all_profiles"
+    name = "api:vda_ir_control:all_profiles"
+    requires_auth = True
+
+    async def get(self, request):
+        """Get all profiles from all sources with priority applied.
+
+        Returns profiles from all sources (builtin, community, user) with
+        duplicates resolved by priority: user > community > builtin.
+        """
+        hass = request.app["hass"]
+        storage = get_storage(hass)
+        manager = get_profile_manager(hass)
+        await manager.async_load()
+
+        # Build merged profile dict with priority
+        all_profiles = {}
+
+        # 1. Add builtin profiles (lowest priority)
+        for profile in manager.get_all_builtin_profiles():
+            pid = profile["profile_id"]
+            all_profiles[pid] = {
+                **profile,
+                "_source": "builtin",
+                "_prefix": f"builtin:{pid}",
+            }
+
+        # 2. Add community profiles (overrides builtin)
+        for profile in manager.get_all_community_profiles():
+            pid = profile["profile_id"]
+            all_profiles[pid] = {
+                **profile,
+                "_source": "community",
+                "_prefix": f"community:{pid}",
+            }
+
+        # 3. Add user profiles (highest priority, overrides all)
+        user_profiles = await storage.async_get_all_profiles()
+        for profile in user_profiles:
+            pid = profile.profile_id
+            profile_dict = profile.to_dict()
+            all_profiles[pid] = {
+                **profile_dict,
+                "_source": "user",
+                "_prefix": pid,  # No prefix for user profiles
+            }
+
+        # Get counts by source
+        builtin_count = len(manager.get_all_builtin_profiles())
+        community_count = len(manager.get_all_community_profiles())
+        user_count = len(user_profiles)
+
+        return self.json({
+            "profiles": list(all_profiles.values()),
+            "total": len(all_profiles),
+            "by_source": {
+                "builtin": builtin_count,
+                "community": community_count,
+                "user": user_count,
+            },
+            "sync_status": manager.get_sync_status(),
+        })
 
 
 # ============================================================================
@@ -1407,6 +1600,13 @@ async def async_setup_api(hass: HomeAssistant) -> None:
     hass.http.register_view(VDAIRPortAssignmentsView())
     hass.http.register_view(VDAIRBuiltinProfilesView())
     hass.http.register_view(VDAIRBuiltinProfileView())
+
+    # Community profile endpoints
+    hass.http.register_view(VDAIRCommunityProfilesView())
+    hass.http.register_view(VDAIRCommunityProfileView())
+    hass.http.register_view(VDAIRSyncProfilesView())
+    hass.http.register_view(VDAIRExportProfileView())
+    hass.http.register_view(VDAIRAllProfilesView())
 
     # Network device endpoints
     hass.http.register_view(VDAIRNetworkDevicesView())

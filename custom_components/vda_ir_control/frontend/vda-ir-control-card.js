@@ -24,6 +24,10 @@ class VDAIRControlCard extends HTMLElement {
     this._builtinProfiles = [];
     this._builtinManufacturers = [];
     this._builtinDeviceTypes = [];
+    // Community profiles state
+    this._communityProfiles = [];
+    this._syncStatus = null;
+    this._isSyncing = false;
     // Network devices state
     this._networkDevices = [];
     this._selectedNetworkDevice = null;
@@ -60,6 +64,7 @@ class VDAIRControlCard extends HTMLElement {
       this._loadBoards(),
       this._loadProfiles(),
       this._loadBuiltinProfiles(),
+      this._loadCommunityProfiles(),
       this._loadDevices(),
       this._loadGPIOPins(),
       this._loadNetworkDevices(),
@@ -217,6 +222,106 @@ class VDAIRControlCard extends HTMLElement {
       this._builtinProfiles = [];
       this._builtinManufacturers = [];
       this._builtinDeviceTypes = [];
+    }
+  }
+
+  async _loadCommunityProfiles() {
+    try {
+      const resp = await fetch('/api/vda_ir_control/community_profiles', {
+        headers: {
+          'Authorization': `Bearer ${this._hass.auth.data.access_token}`,
+        },
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        this._communityProfiles = data.profiles || [];
+        this._syncStatus = {
+          last_sync: data.last_sync,
+          manifest_version: data.manifest_version,
+          repository_url: data.repository_url,
+        };
+      } else {
+        this._communityProfiles = [];
+        this._syncStatus = null;
+      }
+    } catch (e) {
+      console.error('Failed to load community profiles:', e);
+      this._communityProfiles = [];
+      this._syncStatus = null;
+    }
+  }
+
+  async _syncCommunityProfiles() {
+    if (this._isSyncing) return;
+
+    this._isSyncing = true;
+    this._render();
+
+    try {
+      const resp = await fetch('/api/vda_ir_control/sync_profiles', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this._hass.auth.data.access_token}`,
+        },
+      });
+
+      if (resp.ok) {
+        const result = await resp.json();
+        if (result.success) {
+          // Reload community profiles
+          await this._loadCommunityProfiles();
+          this._showNotification(`Synced: ${result.message}`, 'success');
+        } else {
+          this._showNotification(`Sync failed: ${result.message}`, 'error');
+        }
+      } else {
+        this._showNotification('Failed to sync profiles', 'error');
+      }
+    } catch (e) {
+      console.error('Failed to sync community profiles:', e);
+      this._showNotification('Sync error: ' + e.message, 'error');
+    } finally {
+      this._isSyncing = false;
+      this._render();
+    }
+  }
+
+  async _exportProfileForContribution(profileId) {
+    try {
+      const resp = await fetch(`/api/vda_ir_control/export_profile/${profileId}`, {
+        headers: {
+          'Authorization': `Bearer ${this._hass.auth.data.access_token}`,
+        },
+      });
+
+      if (resp.ok) {
+        const data = await resp.json();
+        // Show export modal
+        this._exportModal = {
+          profileId: profileId,
+          profileName: data.profile_name,
+          exportJson: data.export_json,
+          suggestedPath: data.suggested_path,
+          contributionUrl: data.contribution_url,
+          repositoryUrl: data.repository_url,
+        };
+        this._render();
+      } else {
+        this._showNotification('Failed to export profile', 'error');
+      }
+    } catch (e) {
+      console.error('Failed to export profile:', e);
+      this._showNotification('Export error: ' + e.message, 'error');
+    }
+  }
+
+  _formatLastSync(isoString) {
+    if (!isoString) return 'Never synced';
+    try {
+      const date = new Date(isoString);
+      return date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
+    } catch (e) {
+      return isoString;
     }
   }
 
@@ -939,8 +1044,52 @@ class VDAIRControlCard extends HTMLElement {
 
   _renderProfilesTab() {
     return `
-      <!-- Built-in Profiles Section -->
+      <!-- Community Profiles Section -->
       <div class="section">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+          <div class="section-title" style="margin-bottom: 0;">Community Profiles</div>
+          <div style="display: flex; align-items: center; gap: 12px;">
+            <span class="badge badge-info">${this._communityProfiles.length} synced</span>
+            <button class="btn btn-secondary btn-small" data-action="sync-community-profiles" ${this._isSyncing ? 'disabled' : ''}>
+              ${this._isSyncing ? 'Syncing...' : 'Sync from GitHub'}
+            </button>
+          </div>
+        </div>
+        <p style="font-size: 12px; color: var(--secondary-text-color); margin-bottom: 12px;">
+          Last sync: ${this._formatLastSync(this._syncStatus?.last_sync)}
+          ${this._syncStatus?.repository_url ? ` • <a href="${this._syncStatus.repository_url}" target="_blank" style="color: var(--primary-color);">View Repository</a>` : ''}
+        </p>
+
+        ${this._communityProfiles.length === 0 ? `
+          <div class="empty-state" style="padding: 20px;">
+            <p style="color: var(--secondary-text-color);">No community profiles synced</p>
+            <p style="font-size: 12px; color: var(--secondary-text-color);">Click "Sync from GitHub" to download community-contributed profiles</p>
+          </div>
+        ` : `
+          <div class="builtin-profiles-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px;">
+            ${this._communityProfiles.map(profile => `
+              <div class="list-item" style="cursor: default; flex-direction: column; align-items: flex-start; padding: 12px;">
+                <div class="list-item-title" style="margin-bottom: 4px;">
+                  ${profile.name}
+                  <span class="badge" style="background: #6366f1; color: white; font-size: 9px;">Community</span>
+                </div>
+                <div class="list-item-subtitle" style="margin-bottom: 8px;">
+                  ${profile.manufacturer} • ${this._formatDeviceType(profile.device_type)}
+                </div>
+                <div style="font-size: 11px; color: var(--secondary-text-color); margin-bottom: 8px;">
+                  ${Object.keys(profile.codes || {}).length} commands • ${profile.protocol || 'NEC'} protocol
+                </div>
+                <button class="btn btn-primary btn-small" style="width: 100%;" data-action="use-community-profile" data-profile-id="${profile.profile_id}">
+                  Use This Profile
+                </button>
+              </div>
+            `).join('')}
+          </div>
+        `}
+      </div>
+
+      <!-- Built-in Profiles Section -->
+      <div class="section" style="margin-top: 24px;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
           <div class="section-title" style="margin-bottom: 0;">Built-in Profiles</div>
           <span class="badge badge-success">${this._builtinProfiles.length} available</span>
@@ -1007,12 +1156,59 @@ class VDAIRControlCard extends HTMLElement {
               <button class="btn btn-secondary btn-small" data-action="learn-commands" data-profile-id="${profile.profile_id}">
                 Learn
               </button>
+              <button class="btn btn-secondary btn-small" data-action="export-profile" data-profile-id="${profile.profile_id}" title="Export for contribution">
+                Export
+              </button>
               <button class="btn btn-danger btn-small" data-action="delete-profile" data-profile-id="${profile.profile_id}">
                 Delete
               </button>
             </div>
           </div>
         `).join('')}
+      </div>
+
+      ${this._renderExportModal()}
+    `;
+  }
+
+  _renderExportModal() {
+    if (!this._exportModal) return '';
+
+    return `
+      <div class="modal-overlay" data-action="close-export-modal">
+        <div class="modal" style="max-width: 600px;" onclick="event.stopPropagation()">
+          <div class="modal-header">
+            <h3>Export Profile for Contribution</h3>
+            <button class="modal-close" data-action="close-export-modal">&times;</button>
+          </div>
+          <div class="modal-content">
+            <p style="margin-bottom: 16px;">
+              Share your profile with the community! Copy the JSON below and submit it to the
+              <a href="${this._exportModal.repositoryUrl}" target="_blank" style="color: var(--primary-color);">community profiles repository</a>.
+            </p>
+
+            <div style="margin-bottom: 12px;">
+              <label style="font-weight: 500; display: block; margin-bottom: 4px;">Suggested file path:</label>
+              <code style="background: var(--secondary-background-color); padding: 8px 12px; border-radius: 4px; display: block;">
+                ${this._exportModal.suggestedPath}
+              </code>
+            </div>
+
+            <div style="margin-bottom: 16px;">
+              <label style="font-weight: 500; display: block; margin-bottom: 4px;">Profile JSON:</label>
+              <textarea id="export-json" readonly style="width: 100%; height: 200px; font-family: monospace; font-size: 12px; padding: 12px; border-radius: 6px; border: 1px solid var(--divider-color); background: var(--secondary-background-color); color: var(--primary-text-color); resize: vertical;">${this._exportModal.exportJson}</textarea>
+            </div>
+
+            <div style="display: flex; gap: 12px;">
+              <button class="btn btn-primary" data-action="copy-export-json">
+                Copy to Clipboard
+              </button>
+              <a href="${this._exportModal.contributionUrl}" target="_blank" class="btn btn-secondary">
+                Open Contribution Form
+              </a>
+            </div>
+          </div>
+        </div>
       </div>
     `;
   }
@@ -1411,6 +1607,13 @@ class VDAIRControlCard extends HTMLElement {
           <div class="form-group">
             <label>Profile</label>
             <select id="device-profile">
+              ${this._communityProfiles.length > 0 ? `
+                <optgroup label="Community Profiles">
+                  ${this._communityProfiles.map(p => `
+                    <option value="community:${p.profile_id}" ${this._modal?.preselectedProfile === `community:${p.profile_id}` ? 'selected' : ''}>${p.name} (${p.manufacturer})</option>
+                  `).join('')}
+                </optgroup>
+              ` : ''}
               ${this._builtinProfiles.length > 0 ? `
                 <optgroup label="Built-in Profiles">
                   ${this._builtinProfiles.map(p => `
@@ -1425,7 +1628,7 @@ class VDAIRControlCard extends HTMLElement {
                   `).join('')}
                 </optgroup>
               ` : ''}
-              ${this._profiles.length === 0 && this._builtinProfiles.length === 0 ? '<option value="">No profiles available</option>' : ''}
+              ${this._profiles.length === 0 && this._builtinProfiles.length === 0 && this._communityProfiles.length === 0 ? '<option value="">No profiles available</option>' : ''}
             </select>
           </div>
 
@@ -2656,6 +2859,13 @@ class VDAIRControlCard extends HTMLElement {
           <div class="form-group">
             <label>Profile</label>
             <select id="edit-device-profile">
+              ${this._communityProfiles.length > 0 ? `
+                <optgroup label="Community Profiles">
+                  ${this._communityProfiles.map(p => `
+                    <option value="community:${p.profile_id}" ${device.device_profile_id === `community:${p.profile_id}` ? 'selected' : ''}>${p.name} (${p.manufacturer})</option>
+                  `).join('')}
+                </optgroup>
+              ` : ''}
               ${this._builtinProfiles.length > 0 ? `
                 <optgroup label="Built-in Profiles">
                   ${this._builtinProfiles.map(p => `
@@ -3037,6 +3247,38 @@ class VDAIRControlCard extends HTMLElement {
           await this._loadDeviceOutputPorts(this._boards[0].board_id);
         }
         this._render();
+        break;
+
+      case 'use-community-profile':
+        // Open device creation modal with this community profile pre-selected
+        this._modal = { type: 'create-device', preselectedProfile: `community:${e.target.dataset.profileId}` };
+        this._deviceOutputPorts = [];
+        if (this._boards.length > 0) {
+          await this._loadDeviceOutputPorts(this._boards[0].board_id);
+        }
+        this._render();
+        break;
+
+      case 'sync-community-profiles':
+        await this._syncCommunityProfiles();
+        break;
+
+      case 'export-profile':
+        await this._exportProfileForContribution(e.target.dataset.profileId);
+        break;
+
+      case 'close-export-modal':
+        this._exportModal = null;
+        this._render();
+        break;
+
+      case 'copy-export-json':
+        const textarea = this.shadowRoot.getElementById('export-json');
+        if (textarea) {
+          textarea.select();
+          document.execCommand('copy');
+          this._showNotification('Copied to clipboard!', 'success');
+        }
         break;
 
       case 'filter-builtin':

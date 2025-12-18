@@ -17,6 +17,7 @@ from .services import async_setup_services
 from .api import async_setup_api
 from .storage import get_storage
 from .network_coordinator import async_setup_network_coordinator
+from .profile_manager import get_profile_manager
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
@@ -31,6 +32,14 @@ REMOTE_CARD_URL = f"/{DOMAIN}/vda-ir-remote-card.js"
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Set up the VDA IR Control component."""
     hass.data.setdefault(DOMAIN, {})
+
+    # Initialize profile manager and load cached community profiles
+    profile_manager = get_profile_manager(hass)
+    await profile_manager.async_load()
+    _LOGGER.info(
+        "Profile manager initialized: %d community profiles cached",
+        len(profile_manager.get_all_community_profiles())
+    )
 
     # Register services
     await async_setup_services(hass)

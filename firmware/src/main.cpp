@@ -24,6 +24,7 @@
 #include <IRrecv.h>
 #include <IRutils.h>
 #include <DNSServer.h>
+#include <Update.h>
 
 #ifdef USE_ETHERNET
   #include <ETH.h>
@@ -39,6 +40,9 @@
   // ESP32 DevKit has built-in LED on GPIO2
   #define STATUS_LED_PIN 2
 #endif
+
+// Firmware version
+#define FIRMWARE_VERSION "1.2.1"
 
 // LED States
 enum LedState {
@@ -169,6 +173,9 @@ void handleSerialConfig();
 void handleSerialSend();
 void handleSerialRead();
 void handleSerialStatus();
+void handleOTAPage();
+void handleOTAUpload();
+void handleOTAComplete();
 void initSerialBridge(int rxPin, int txPin, int baud);
 
 // ============ Setup ============
@@ -181,7 +188,7 @@ void setup() {
   setLedState(LED_BLINK_SLOW);  // Indicate booting
 
   Serial.println("\n\n========================================");
-  Serial.println("   VDA IR Control Firmware v1.2.1");
+  Serial.printf("   VDA IR Control Firmware v%s\n", FIRMWARE_VERSION);
 #ifdef USE_ETHERNET
   Serial.println("   Mode: Ethernet (ESP32-POE-ISO)");
 #else
@@ -980,6 +987,10 @@ void setupWebServer() {
   server.on("/serial/read", HTTP_GET, handleSerialRead);
   server.on("/serial/status", HTTP_GET, handleSerialStatus);
 
+  // OTA Update routes (available for both WiFi and Ethernet)
+  server.on("/update", HTTP_GET, handleOTAPage);
+  server.on("/update", HTTP_POST, handleOTAComplete, handleOTAUpload);
+
 #ifdef USE_WIFI
   server.on("/wifi/config", HTTP_POST, handleWiFiConfig);
   server.on("/wifi/scan", HTTP_GET, []() {
@@ -1017,6 +1028,117 @@ void setupWebServer() {
   Serial.println("HTTP server started on port 80");
 }
 
+// ============ OTA Update Handlers ============
+void handleOTAPage() {
+  String html = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Firmware Update</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 40px; background: #1a1a2e; color: #eee; }
+    .container { max-width: 500px; margin: 0 auto; background: #16213e; padding: 30px; border-radius: 10px; }
+    h1 { color: #e94560; margin-top: 0; }
+    form { margin-top: 20px; }
+    input[type="file"] { margin: 15px 0; color: #eee; }
+    input[type="submit"] { background: #e94560; color: white; border: none; padding: 12px 30px; border-radius: 5px; cursor: pointer; font-size: 16px; }
+    input[type="submit"]:hover { background: #ff6b6b; }
+    .info { background: #0f3460; padding: 15px; border-radius: 5px; margin-bottom: 20px; }
+    .warning { background: #614a19; padding: 10px; border-radius: 5px; margin-top: 15px; font-size: 14px; }
+    #progress { display: none; margin-top: 20px; }
+    .progress-bar { background: #0f3460; border-radius: 5px; height: 30px; overflow: hidden; }
+    .progress-fill { background: #e94560; height: 100%; width: 0%; transition: width 0.3s; }
+    .progress-text { text-align: center; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Firmware Update</h1>
+    <div class="info">
+      <strong>Current Version:</strong> )rawliteral" + String(FIRMWARE_VERSION) + R"rawliteral(<br>
+      <strong>Device:</strong> )rawliteral" + boardName + R"rawliteral(
+    </div>
+    <form method="POST" action="/update" enctype="multipart/form-data" id="uploadForm">
+      <div>Select firmware file (.bin):</div>
+      <input type="file" name="firmware" accept=".bin" required>
+      <br>
+      <input type="submit" value="Upload & Update">
+    </form>
+    <div class="warning">
+      ⚠️ Do not disconnect power during update. Settings will be preserved.
+    </div>
+    <div id="progress">
+      <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+      <div class="progress-text" id="progressText">Uploading... 0%</div>
+    </div>
+  </div>
+  <script>
+    document.getElementById('uploadForm').addEventListener('submit', function(e) {
+      e.preventDefault();
+      var form = e.target;
+      var formData = new FormData(form);
+      var xhr = new XMLHttpRequest();
+      document.getElementById('progress').style.display = 'block';
+      xhr.upload.addEventListener('progress', function(e) {
+        if (e.lengthComputable) {
+          var pct = Math.round((e.loaded / e.total) * 100);
+          document.getElementById('progressFill').style.width = pct + '%';
+          document.getElementById('progressText').textContent = 'Uploading... ' + pct + '%';
+        }
+      });
+      xhr.addEventListener('load', function() {
+        if (xhr.status === 200) {
+          document.getElementById('progressText').textContent = 'Update complete! Rebooting...';
+          setTimeout(function() { location.reload(); }, 5000);
+        } else {
+          document.getElementById('progressText').textContent = 'Update failed: ' + xhr.responseText;
+        }
+      });
+      xhr.addEventListener('error', function() {
+        document.getElementById('progressText').textContent = 'Upload failed. Please try again.';
+      });
+      xhr.open('POST', '/update');
+      xhr.send(formData);
+    });
+  </script>
+</body>
+</html>
+)rawliteral";
+  server.send(200, "text/html", html);
+}
+
+void handleOTAUpload() {
+  HTTPUpload& upload = server.upload();
+
+  if (upload.status == UPLOAD_FILE_START) {
+    Serial.printf("OTA Update Start: %s\n", upload.filename.c_str());
+    if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+      Update.printError(Serial);
+    }
+  } else if (upload.status == UPLOAD_FILE_WRITE) {
+    if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+      Update.printError(Serial);
+    }
+  } else if (upload.status == UPLOAD_FILE_END) {
+    if (Update.end(true)) {
+      Serial.printf("OTA Update Success: %u bytes\n", upload.totalSize);
+    } else {
+      Update.printError(Serial);
+    }
+  }
+}
+
+void handleOTAComplete() {
+  if (Update.hasError()) {
+    server.send(500, "text/plain", "Update failed!");
+  } else {
+    server.send(200, "text/plain", "Update successful! Rebooting...");
+    delay(1000);
+    ESP.restart();
+  }
+}
+
 // ============ HTTP Handlers ============
 void handleRoot() {
 #ifdef USE_WIFI
@@ -1036,7 +1158,7 @@ void handleInfo() {
   doc["board_name"] = boardName;
   doc["mac_address"] = getMacAddress();
   doc["ip_address"] = getLocalIP();
-  doc["firmware_version"] = "1.2.1";
+  doc["firmware_version"] = FIRMWARE_VERSION;
   doc["adopted"] = adopted;
   doc["total_ports"] = portCount;
 
@@ -1268,7 +1390,21 @@ void handleSendIR() {
   } else if (protocol == "panasonic") {
     irSenders[portIndex]->sendPanasonic(0x4004, codeValue);  // Standard Panasonic address
   } else if (protocol == "pioneer") {
-    irSenders[portIndex]->sendPioneer(codeValue);  // Pioneer uses 40kHz, different timing
+    // Pioneer: exact timing from IRremoteESP8266 library
+    // kPioneerHdrMark=8506, kPioneerHdrSpace=4191
+    // kPioneerBitMark=568, kPioneerOneSpace=1542, kPioneerZeroSpace=487
+    // kPioneerMinGap=25181, kPioneerMinCommandLength=84906
+    // 40kHz, MSBfirst=true, duty=33
+    irSenders[portIndex]->sendGeneric(
+      8506, 4191,     // Header mark, space (µs)
+      568, 1542,      // Bit mark, one space
+      568, 487,       // Bit mark, zero space
+      568, 25181,     // Footer mark, gap
+      84906,          // Min command length
+      codeValue, 32,  // Data, bits
+      40,             // 40kHz frequency
+      true, 0, 33     // MSBfirst=true, no repeat, 33% duty
+    );
   } else {
     // Send as raw NEC by default
     irSenders[portIndex]->sendNEC(codeValue);

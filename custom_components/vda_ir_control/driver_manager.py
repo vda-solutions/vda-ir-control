@@ -144,7 +144,7 @@ class DriverManager:
                     _LOGGER.error("Failed to fetch manifest: HTTP %d", resp.status)
                     return result
 
-                manifest = await resp.json()
+                manifest = await resp.json(content_type=None)
                 new_etag = resp.headers.get("ETag")
 
             # Validate manifest
@@ -166,7 +166,7 @@ class DriverManager:
                     driver_url = f"{GITHUB_RAW_BASE}/{driver_path}"
                     async with session.get(driver_url, timeout=10) as driver_resp:
                         if driver_resp.status == 200:
-                            driver_data = await driver_resp.json()
+                            driver_data = await driver_resp.json(content_type=None)
                             driver_id = driver_data.get("driver_id")
 
                             if driver_id:

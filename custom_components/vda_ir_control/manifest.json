@@ -6,6 +6,6 @@
   "documentation": "https://github.com/vda-solutions/vda-ir-control",
   "iot_class": "local_polling",
   "requirements": [],
-  "version": "1.4.0",
+  "version": "1.5.0",
   "issue_tracker": "https://github.com/vda-solutions/vda-ir-control/issues"
 }

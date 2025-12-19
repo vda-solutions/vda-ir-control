@@ -28,6 +28,7 @@ from .ir_profiles import (
     get_available_device_types,
 )
 from .profile_manager import get_profile_manager
+from .driver_manager import get_driver_manager
 from .models import NetworkDevice, NetworkConfig, SerialDevice, SerialConfig, DeviceCommand, ResponsePattern
 from .network_coordinator import (
     get_network_coordinator,
@@ -40,6 +41,7 @@ from .serial_coordinator import (
     async_remove_serial_coordinator,
     get_available_serial_ports,
 )
+from .discovery_service import get_discovery_service
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -582,6 +584,331 @@ class VDAIRAllProfilesView(HomeAssistantView):
             },
             "sync_status": manager.get_sync_status(),
         })
+
+
+# ============================================================================
+# NETWORK DEVICE DRIVER API ENDPOINTS
+# ============================================================================
+
+
+class VDAIRDriversView(HomeAssistantView):
+    """API endpoint for all network device drivers."""
+
+    url = "/api/vda_ir_control/drivers"
+    name = "api:vda_ir_control:drivers"
+    requires_auth = True
+
+    async def get(self, request):
+        """Get all drivers from all sources.
+
+        Optional query parameters:
+        - device_type: Filter by device type (hdmi_matrix, projector, audio_receiver)
+        - source: Filter by source (builtin, community)
+        """
+        hass = request.app["hass"]
+        manager = get_driver_manager(hass)
+        await manager.async_load()
+
+        device_type = request.query.get("device_type")
+        source = request.query.get("source")
+
+        if device_type:
+            drivers = manager.get_drivers_by_type(device_type)
+        elif source == "builtin":
+            drivers = manager.get_all_builtin_drivers()
+        elif source == "community":
+            drivers = manager.get_all_community_drivers()
+        else:
+            drivers = manager.get_all_drivers()
+
+        return self.json({
+            "drivers": drivers,
+            "total": len(drivers),
+            "sync_status": manager.get_sync_status(),
+        })
+
+
+class VDAIRDriverView(HomeAssistantView):
+    """API endpoint for a single driver."""
+
+    url = "/api/vda_ir_control/drivers/{driver_id}"
+    name = "api:vda_ir_control:driver"
+    requires_auth = True
+
+    async def get(self, request, driver_id):
+        """Get a specific driver by ID."""
+        hass = request.app["hass"]
+        manager = get_driver_manager(hass)
+        await manager.async_load()
+
+        driver = manager.get_driver(driver_id)
+        if driver is None:
+            return self.json({"error": "Driver not found"}, status_code=404)
+
+        return self.json(driver)
+
+
+class VDAIRSyncDriversView(HomeAssistantView):
+    """API endpoint for syncing community drivers from GitHub."""
+
+    url = "/api/vda_ir_control/sync_drivers"
+    name = "api:vda_ir_control:sync_drivers"
+    requires_auth = True
+
+    async def post(self, request):
+        """Trigger sync of community drivers from GitHub."""
+        hass = request.app["hass"]
+        manager = get_driver_manager(hass)
+
+        _LOGGER.info("Starting community driver sync")
+        result = await manager.async_sync_community_drivers()
+
+        if result["success"]:
+            _LOGGER.info("Community driver sync completed: %s", result["message"])
+        else:
+            _LOGGER.warning("Community driver sync failed: %s", result["message"])
+
+        return self.json(result)
+
+    async def get(self, request):
+        """Get sync status without triggering a sync."""
+        hass = request.app["hass"]
+        manager = get_driver_manager(hass)
+        await manager.async_load()
+
+        status = manager.get_sync_status()
+        return self.json(status)
+
+
+class VDAIRCreateFromDriverView(HomeAssistantView):
+    """API endpoint for creating a network device from a driver template."""
+
+    url = "/api/vda_ir_control/create_from_driver"
+    name = "api:vda_ir_control:create_from_driver"
+    requires_auth = True
+
+    async def post(self, request):
+        """Create a network device from a driver template.
+
+        Required fields:
+        - driver_id: The driver ID to use as template
+        - device_id: Unique ID for the new device
+        - name: Display name for the device
+        - ip_address: IP address of the device
+
+        Optional fields:
+        - port: Port override (uses driver default if not specified)
+        - location: Location string
+        - matrix_inputs: List of input configurations
+        - matrix_outputs: List of output configurations
+        """
+        hass = request.app["hass"]
+        manager = get_driver_manager(hass)
+        storage = get_storage(hass)
+
+        await manager.async_load()
+
+        try:
+            data = await request.json()
+        except Exception:
+            return self.json({"error": "Invalid JSON"}, status_code=400)
+
+        # Validate required fields
+        required = ["driver_id", "device_id", "name", "ip_address"]
+        for field in required:
+            if field not in data:
+                return self.json({"error": f"Missing required field: {field}"}, status_code=400)
+
+        # Create device from driver
+        device = manager.create_network_device_from_driver(
+            driver_id=data["driver_id"],
+            device_id=data["device_id"],
+            name=data["name"],
+            ip_address=data["ip_address"],
+            port=data.get("port"),
+            location=data.get("location", ""),
+            matrix_inputs=data.get("matrix_inputs"),
+            matrix_outputs=data.get("matrix_outputs"),
+        )
+
+        if device is None:
+            return self.json({"error": "Driver not found"}, status_code=404)
+
+        # Save to storage
+        await storage.async_save_network_device(device)
+        _LOGGER.info("Created network device '%s' from driver '%s'", device.name, data["driver_id"])
+
+        # Setup coordinator and connect
+        try:
+            coordinator = await async_setup_network_coordinator(hass, device)
+            connected = coordinator.is_connected
+        except Exception as err:
+            _LOGGER.warning("Failed to connect to network device %s: %s", device.device_id, err)
+            connected = False
+
+        return self.json({
+            "success": True,
+            "device_id": device.device_id,
+            "driver_id": data["driver_id"],
+            "connected": connected,
+            "command_count": len(device.commands),
+        })
+
+
+class VDAIRGetRoutingCommandView(HomeAssistantView):
+    """API endpoint for getting matrix routing commands from a driver."""
+
+    url = "/api/vda_ir_control/drivers/{driver_id}/routing"
+    name = "api:vda_ir_control:driver_routing"
+    requires_auth = True
+
+    async def get(self, request, driver_id):
+        """Get the routing command for a matrix driver.
+
+        Query parameters:
+        - input: Input number (required)
+        - output: Output number (0 for all outputs)
+        """
+        hass = request.app["hass"]
+        manager = get_driver_manager(hass)
+        await manager.async_load()
+
+        input_num = request.query.get("input")
+        output_num = request.query.get("output", "0")
+
+        if not input_num:
+            return self.json({"error": "Missing required parameter: input"}, status_code=400)
+
+        try:
+            input_num = int(input_num)
+            output_num = int(output_num)
+        except ValueError:
+            return self.json({"error": "input and output must be integers"}, status_code=400)
+
+        command = manager.get_routing_command(driver_id, input_num, output_num)
+        if command is None:
+            return self.json({"error": "Driver not found or not a matrix driver"}, status_code=404)
+
+        return self.json({
+            "driver_id": driver_id,
+            "input": input_num,
+            "output": output_num,
+            "command": command,
+        })
+
+
+class VDAIRDiscoverDevicesView(HomeAssistantView):
+    """API endpoint for discovering network devices."""
+
+    url = "/api/vda_ir_control/discover_devices"
+    name = "api:vda_ir_control:discover_devices"
+    requires_auth = True
+
+    async def post(self, request):
+        """Run device discovery on the network.
+
+        Optional body parameters:
+        - subnet: Subnet to scan (e.g., "192.168.1")
+        - timeout: Timeout in seconds (default: 5.0)
+        """
+        hass = request.app["hass"]
+        service = get_discovery_service(hass)
+
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+
+        subnet = data.get("subnet")
+        timeout = data.get("timeout", 5.0)
+
+        if service.is_scanning:
+            return self.json({
+                "error": "Discovery scan already in progress",
+                "is_scanning": True,
+            }, status_code=409)
+
+        _LOGGER.info("Starting device discovery (subnet=%s, timeout=%s)", subnet, timeout)
+
+        try:
+            devices = await service.async_discover_all(subnet=subnet, timeout=timeout)
+            return self.json({
+                "success": True,
+                "devices": [d.to_dict() for d in devices],
+                "total": len(devices),
+            })
+        except Exception as err:
+            _LOGGER.error("Discovery failed: %s", err)
+            return self.json({"error": str(err)}, status_code=500)
+
+    async def get(self, request):
+        """Get discovery status and cached results."""
+        hass = request.app["hass"]
+        service = get_discovery_service(hass)
+
+        return self.json({
+            "is_scanning": service.is_scanning,
+            "devices": [d.to_dict() for d in service.discovered_devices],
+            "total": len(service.discovered_devices),
+        })
+
+
+class VDAIRProbeDeviceView(HomeAssistantView):
+    """API endpoint for probing a specific device."""
+
+    url = "/api/vda_ir_control/probe_device"
+    name = "api:vda_ir_control:probe_device"
+    requires_auth = True
+
+    async def post(self, request):
+        """Probe a specific IP address to identify the device.
+
+        Required body parameters:
+        - ip_address: IP address to probe
+
+        Optional body parameters:
+        - port: Specific port to probe (if not specified, tries all known ports)
+        - timeout: Timeout in seconds (default: 5.0)
+        """
+        hass = request.app["hass"]
+        service = get_discovery_service(hass)
+
+        try:
+            data = await request.json()
+        except Exception:
+            return self.json({"error": "Invalid JSON"}, status_code=400)
+
+        if "ip_address" not in data:
+            return self.json({"error": "Missing required field: ip_address"}, status_code=400)
+
+        ip_address = data["ip_address"]
+        port = data.get("port")
+        timeout = data.get("timeout", 5.0)
+
+        _LOGGER.info("Probing device at %s:%s", ip_address, port or "all")
+
+        try:
+            device = await service.async_probe_device(
+                ip_address=ip_address,
+                port=port,
+                timeout=timeout,
+            )
+
+            if device:
+                return self.json({
+                    "success": True,
+                    "found": True,
+                    "device": device.to_dict(),
+                })
+            else:
+                return self.json({
+                    "success": True,
+                    "found": False,
+                    "message": f"No device found at {ip_address}",
+                })
+        except Exception as err:
+            _LOGGER.error("Probe failed: %s", err)
+            return self.json({"error": str(err)}, status_code=500)
 
 
 # ============================================================================
@@ -1607,6 +1934,17 @@ async def async_setup_api(hass: HomeAssistant) -> None:
     hass.http.register_view(VDAIRSyncProfilesView())
     hass.http.register_view(VDAIRExportProfileView())
     hass.http.register_view(VDAIRAllProfilesView())
+
+    # Network device driver endpoints
+    hass.http.register_view(VDAIRDriversView())
+    hass.http.register_view(VDAIRDriverView())
+    hass.http.register_view(VDAIRSyncDriversView())
+    hass.http.register_view(VDAIRCreateFromDriverView())
+    hass.http.register_view(VDAIRGetRoutingCommandView())
+
+    # Discovery endpoints
+    hass.http.register_view(VDAIRDiscoverDevicesView())
+    hass.http.register_view(VDAIRProbeDeviceView())
 
     # Network device endpoints
     hass.http.register_view(VDAIRNetworkDevicesView())

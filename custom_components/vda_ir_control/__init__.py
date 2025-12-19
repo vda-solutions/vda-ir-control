@@ -15,6 +15,7 @@ from .api import async_setup_api
 from .storage import get_storage
 from .network_coordinator import async_setup_network_coordinator
 from .profile_manager import get_profile_manager
+from .driver_manager import get_driver_manager
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
@@ -31,6 +32,14 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     _LOGGER.info(
         "Profile manager initialized: %d community profiles cached",
         len(profile_manager.get_all_community_profiles())
+    )
+
+    # Initialize driver manager and load cached community drivers
+    driver_manager = get_driver_manager(hass)
+    await driver_manager.async_load()
+    _LOGGER.info(
+        "Driver manager initialized: %d community drivers cached",
+        len(driver_manager.get_all_community_drivers())
     )
 
     # Register services

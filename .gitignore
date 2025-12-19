@@ -41,3 +41,4 @@ mosquitto/data/
 
 # PlatformIO build artifacts
 firmware/.pio/
+CLAUDE.md

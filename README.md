@@ -27,6 +27,7 @@ This integration works with several companion repositories:
 | [vda-ir-remote-card](https://github.com/vda-solutions/vda-ir-remote-card) | Remote Control Lovelace Card | Optional |
 | [vda-ir-firmware](https://github.com/vda-solutions/vda-ir-firmware) | ESP32 Firmware | Yes |
 | [vda-ir-profiles](https://github.com/vda-solutions/vda-ir-profiles) | Community IR Profiles | Optional |
+| [vda-network-drivers](https://github.com/vda-solutions/vda-network-drivers) | Network Device Drivers | Optional |
 
 ## Installation
 
@@ -101,6 +102,16 @@ The integration includes pre-loaded profiles for popular devices:
 
 Additional profiles available via [vda-ir-profiles](https://github.com/vda-solutions/vda-ir-profiles) community repository.
 
+## Network Device Drivers
+
+Control network devices directly without IR:
+
+**HDMI Matrices:** Generic protocol (OREI, Monoprice, J-Tech)
+**Projectors:** PJLink Class 1 (Epson, NEC, Sony, BenQ)
+**AV Receivers:** Denon/Marantz, Yamaha
+
+Drivers provide pre-configured commands - just enter the IP address. Sync additional drivers from [vda-network-drivers](https://github.com/vda-solutions/vda-network-drivers).
+
 ## Home Assistant API Endpoints
 
 | Endpoint | Description |
@@ -111,6 +122,10 @@ Additional profiles available via [vda-ir-profiles](https://github.com/vda-solut
 | `/api/vda_ir_control/builtin_profiles` | List built-in profiles |
 | `/api/vda_ir_control/community_profiles` | List synced community profiles |
 | `/api/vda_ir_control/sync_profiles` | Sync from community repo |
+| `/api/vda_ir_control/drivers` | List network device drivers |
+| `/api/vda_ir_control/sync_drivers` | Sync drivers from community repo |
+| `/api/vda_ir_control/create_from_driver` | Create device from driver template |
+| `/api/vda_ir_control/discover_devices` | Discover network devices |
 
 ## Troubleshooting
 

@@ -46,26 +46,29 @@ esptool.py --chip esp32 --port /dev/ttyUSB0 write_flash 0x0 firmware-esp32-devki
 
 ### Step 2: Install Integration (HACS)
 
-1. Open HACS → **Integrations**
+1. Open HACS
 2. Click ⋮ → **Custom repositories**
-3. Add: `https://github.com/vda-solutions/vda-ir-control` (Integration)
-4. Download "VDA IR Control"
-5. Restart Home Assistant
+3. Add: `https://github.com/vda-solutions/vda-ir-control`
+4. Type: **Integration**
+5. Download "VDA IR Control"
+6. Restart Home Assistant
 
 ### Step 3: Install Admin Card (HACS)
 
-1. Open HACS → **Frontend**
+1. Open HACS
 2. Click ⋮ → **Custom repositories**
-3. Add: `https://github.com/vda-solutions/vda-ir-control-admin-card` (Lovelace)
-4. Download "VDA IR Control Admin Card"
-5. Hard refresh browser (Ctrl+Shift+R)
+3. Add: `https://github.com/vda-solutions/vda-ir-control-admin-card`
+4. Type: **Dashboard**
+5. Download "VDA IR Control Admin Card"
+6. Hard refresh browser (Ctrl+Shift+R)
 
 ### Step 4: Install Remote Card (Optional)
 
-1. Open HACS → **Frontend**
+1. Open HACS
 2. Click ⋮ → **Custom repositories**
-3. Add: `https://github.com/vda-solutions/vda-ir-remote-card` (Lovelace)
-4. Download "VDA IR Remote Card"
+3. Add: `https://github.com/vda-solutions/vda-ir-remote-card`
+4. Type: **Dashboard**
+5. Download "VDA IR Remote Card"
 
 ### Step 5: Add Cards to Dashboard
 

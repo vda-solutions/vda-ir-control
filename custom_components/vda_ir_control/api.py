@@ -28,20 +28,13 @@ from .ir_profiles import (
     get_available_device_types,
 )
 from .profile_manager import get_profile_manager
-from .driver_manager import get_driver_manager
-from .models import NetworkDevice, NetworkConfig, SerialDevice, SerialConfig, DeviceCommand, ResponsePattern
-from .network_coordinator import (
-    get_network_coordinator,
-    async_setup_network_coordinator,
-    async_remove_network_coordinator,
-)
+from .models import SerialDevice, SerialConfig, DeviceCommand, ResponsePattern
 from .serial_coordinator import (
     get_serial_coordinator,
     async_setup_serial_coordinator,
     async_remove_serial_coordinator,
     get_available_serial_ports,
 )
-from .discovery_service import get_discovery_service
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -134,6 +127,23 @@ class VDAIRProfileView(HomeAssistantView):
             "available_commands": get_commands_for_device_type(profile.device_type),
         })
 
+    async def delete(self, request, profile_id):
+        """Delete a user profile."""
+        hass = request.app["hass"]
+        storage = get_storage(hass)
+
+        profile = await storage.async_get_profile(profile_id)
+        if profile is None:
+            return self.json({"error": "Profile not found"}, status_code=404)
+
+        await storage.async_delete_profile(profile_id)
+        _LOGGER.info("Deleted user profile: %s", profile_id)
+
+        return self.json({
+            "success": True,
+            "message": f"Deleted profile {profile_id}"
+        })
+
 
 class VDAIRDevicesView(HomeAssistantView):
     """API endpoint for devices."""
@@ -152,6 +162,83 @@ class VDAIRDevicesView(HomeAssistantView):
             "devices": [d.to_dict() for d in devices],
             "total": len(devices),
         })
+
+
+class VDAIRDeviceView(HomeAssistantView):
+    """API endpoint for a single device."""
+
+    url = "/api/vda_ir_control/devices/{device_id}"
+    name = "api:vda_ir_control:device"
+    requires_auth = True
+
+    async def get(self, request, device_id):
+        """Get a single device with its profile codes."""
+        hass = request.app["hass"]
+        storage = get_storage(hass)
+
+        # Get all devices and find the one we need
+        devices = await storage.async_get_all_devices()
+        device = None
+        for d in devices:
+            if d.device_id == device_id:
+                device = d
+                break
+
+        if device is None:
+            return self.json({"error": "Device not found"}, status_code=404)
+
+        # Get the profile to include codes
+        # Check all sources: user storage, builtin, community
+        profile = None
+        codes = {}
+        profile_dict = None
+
+        if device.device_profile_id:
+            # Try user profile first
+            profile = await storage.async_get_profile(device.device_profile_id)
+            if profile:
+                codes = {cmd: code.to_dict() for cmd, code in profile.codes.items()}
+                profile_dict = {
+                    "profile_id": profile.profile_id,
+                    "name": profile.name,
+                    "device_type": profile.device_type.value,
+                    "manufacturer": profile.manufacturer,
+                    "model": profile.model,
+                }
+            else:
+                # Try builtin profile
+                builtin = get_profile_by_id(device.device_profile_id)
+                if builtin:
+                    codes = builtin.get("codes", {})
+                    profile_dict = {
+                        "profile_id": builtin["profile_id"],
+                        "name": builtin["name"],
+                        "device_type": builtin["device_type"],
+                        "manufacturer": builtin.get("manufacturer", ""),
+                        "model": builtin.get("model", ""),
+                    }
+                else:
+                    # Try community profile
+                    manager = get_profile_manager(hass)
+                    await manager.async_load()
+                    community = manager.get_community_profile(device.device_profile_id)
+                    if community:
+                        codes = community.get("codes", {})
+                        profile_dict = {
+                            "profile_id": community["profile_id"],
+                            "name": community["name"],
+                            "device_type": community["device_type"],
+                            "manufacturer": community.get("manufacturer", ""),
+                            "model": community.get("model", ""),
+                        }
+
+        result = device.to_dict()
+        result["codes"] = codes
+        result["profile_id"] = device.device_profile_id  # Add for compatibility
+        if profile_dict:
+            result["profile"] = profile_dict
+
+        return self.json(result)
 
 
 class VDAIRPortsView(HomeAssistantView):
@@ -346,47 +433,116 @@ class VDAIRPortAssignmentsView(HomeAssistantView):
 
 
 class VDAIRBuiltinProfilesView(HomeAssistantView):
-    """API endpoint for built-in IR profiles."""
+    """API endpoint for built-in IR profiles (includes synced community profiles)."""
 
     url = "/api/vda_ir_control/builtin_profiles"
     name = "api:vda_ir_control:builtin_profiles"
     requires_auth = True
 
     async def get(self, request):
-        """Get all built-in IR profiles.
+        """Get all built-in IR profiles including synced community profiles.
+
+        This merges builtin profiles with community profiles synced from GitHub,
+        so they appear together in the admin UI.
 
         Optional query parameters:
         - device_type: Filter by device type (tv, cable_box, soundbar, streaming)
         - manufacturer: Filter by manufacturer name
         """
+        hass = request.app["hass"]
+        manager = get_profile_manager(hass)
+        await manager.async_load()
+
         device_type = request.query.get("device_type")
         manufacturer = request.query.get("manufacturer")
 
+        # Get builtin profiles
         if device_type:
-            profiles = get_profiles_by_type(device_type)
+            builtin_profiles = get_profiles_by_type(device_type)
         elif manufacturer:
-            profiles = get_profiles_by_manufacturer(manufacturer)
+            builtin_profiles = get_profiles_by_manufacturer(manufacturer)
         else:
-            profiles = get_all_profiles()
+            builtin_profiles = get_all_profiles()
+
+        # Get community profiles and filter if needed
+        community_profiles = manager.get_all_community_profiles()
+
+        if device_type:
+            community_profiles = [
+                p for p in community_profiles
+                if p.get("device_type") == device_type
+            ]
+
+        if manufacturer:
+            community_profiles = [
+                p for p in community_profiles
+                if p.get("manufacturer", "").lower() == manufacturer.lower()
+            ]
+
+        # Merge profiles with deduplication by profile_id
+        # Use a dict to deduplicate - community profiles override builtin if same ID
+        merged_profiles = {}
+
+        # Add builtin first
+        for profile in builtin_profiles:
+            profile_id = profile.get("profile_id")
+            if profile_id:
+                merged_profiles[profile_id] = {**profile, "_source": "builtin"}
+
+        # Add community (will override builtin if same profile_id)
+        for profile in community_profiles:
+            profile_id = profile.get("profile_id")
+            if profile_id:
+                merged_profiles[profile_id] = profile  # Already has _source: "community"
+
+        all_profiles = list(merged_profiles.values())
+
+        # Count only unique profiles per source
+        builtin_only_count = len([p for p in all_profiles if p.get("_source") == "builtin"])
+        community_only_count = len([p for p in all_profiles if p.get("_source") == "community"])
+
+        # Get all manufacturers and device types from merged list
+        all_manufacturers = set()
+        all_device_types = set()
+        for p in all_profiles:
+            if p.get("manufacturer"):
+                all_manufacturers.add(p["manufacturer"])
+            if p.get("device_type"):
+                all_device_types.add(p["device_type"])
 
         return self.json({
-            "profiles": profiles,
-            "total": len(profiles),
-            "available_device_types": get_available_device_types(),
-            "available_manufacturers": get_available_manufacturers(),
+            "profiles": all_profiles,
+            "total": len(all_profiles),
+            "builtin_count": builtin_only_count,
+            "community_count": community_only_count,
+            "available_device_types": sorted(list(all_device_types)),
+            "available_manufacturers": sorted(list(all_manufacturers)),
+            "sync_status": manager.get_sync_status(),
         })
 
 
 class VDAIRBuiltinProfileView(HomeAssistantView):
-    """API endpoint for a single built-in IR profile."""
+    """API endpoint for a single built-in IR profile (includes community)."""
 
     url = "/api/vda_ir_control/builtin_profiles/{profile_id}"
     name = "api:vda_ir_control:builtin_profile"
     requires_auth = True
 
     async def get(self, request, profile_id):
-        """Get a specific built-in IR profile by ID."""
+        """Get a specific built-in IR profile by ID.
+
+        Checks builtin profiles first, then community profiles.
+        """
+        hass = request.app["hass"]
+
+        # Try builtin first
         profile = get_profile_by_id(profile_id)
+
+        if profile is None:
+            # Try community profiles
+            manager = get_profile_manager(hass)
+            await manager.async_load()
+            profile = manager.get_community_profile(profile_id)
 
         if profile is None:
             return self.json({"error": "Profile not found"}, status_code=404)
@@ -400,30 +556,108 @@ class VDAIRBuiltinProfileView(HomeAssistantView):
 
 
 class VDAIRCommunityProfilesView(HomeAssistantView):
-    """API endpoint for community IR profiles (synced from GitHub)."""
+    """API endpoint for community IR profiles (available and downloaded)."""
 
     url = "/api/vda_ir_control/community_profiles"
     name = "api:vda_ir_control:community_profiles"
     requires_auth = True
 
     async def get(self, request):
-        """Get all cached community profiles.
+        """Get available and downloaded community profiles.
 
-        Returns profiles synced from the community GitHub repository.
+        Query parameters:
+        - status: "available" (from manifest - default), "downloaded", or "all"
+
+        Returns:
+        - For "available": List from manifest showing what can be downloaded
+        - For "downloaded": Only profiles actually downloaded locally
+        - For "all": Combined list with download status
         """
         hass = request.app["hass"]
         manager = get_profile_manager(hass)
         await manager.async_load()
 
-        profiles = manager.get_all_community_profiles()
-        status = manager.get_sync_status()
+        status_filter = request.query.get("status", "available")
+
+        # Get downloaded profiles
+        downloaded = manager.get_all_community_profiles()
+        downloaded_ids = {p["profile_id"] for p in downloaded}
+
+        # Only fetch manifest if status is "available" or "all"
+        available = []
+        if status_filter in ("available", "all"):
+            manifest_result = await manager.async_fetch_manifest()
+            available = manifest_result.get("available_profiles", [])
+
+        if status_filter == "downloaded":
+            # Only downloaded profiles
+            return self.json({
+                "profiles": downloaded,
+                "total": len(downloaded),
+                "status": "downloaded",
+            })
+
+        if status_filter == "available":
+            # Only available profiles (from manifest)
+            # Mark which ones are already downloaded and add command counts
+            downloaded_dict = {p["profile_id"]: p for p in downloaded}
+
+            for profile in available:
+                profile_id = profile.get("profile_id") or profile.get("id")
+                is_downloaded = profile_id in downloaded_ids
+                profile["downloaded"] = is_downloaded
+
+                # Add command count if downloaded
+                if is_downloaded and profile_id in downloaded_dict:
+                    codes = downloaded_dict[profile_id].get("codes", {})
+                    profile["command_count"] = len(codes)
+                else:
+                    profile["command_count"] = None
+
+            sync_status = manager.get_sync_status()
+
+            return self.json({
+                "profiles": available,
+                "total": len(available),
+                "status": "available",
+                "downloaded_count": len(downloaded),
+                "manifest_version": manifest_result.get("manifest_version") if manifest_result else None,
+                "last_sync": sync_status.get("last_sync"),
+                "repository_url": sync_status.get("repository_url"),
+            })
+
+        # All - merge available and downloaded
+        # Start with available from manifest
+        all_profiles = {}
+        for profile in available:
+            profile_id = profile.get("profile_id") or profile.get("id")
+            if profile_id:
+                all_profiles[profile_id] = {
+                    **profile,
+                    "downloaded": profile_id in downloaded_ids,
+                }
+
+        # Add any downloaded profiles not in manifest
+        for profile in downloaded:
+            profile_id = profile["profile_id"]
+            if profile_id not in all_profiles:
+                all_profiles[profile_id] = {
+                    **profile,
+                    "downloaded": True,
+                    "_not_in_manifest": True,
+                }
+
+        sync_status = manager.get_sync_status()
 
         return self.json({
-            "profiles": profiles,
-            "total": len(profiles),
-            "last_sync": status.get("last_sync"),
-            "manifest_version": status.get("manifest_version"),
-            "repository_url": status.get("repository_url"),
+            "profiles": list(all_profiles.values()),
+            "total": len(all_profiles),
+            "downloaded_count": len(downloaded),
+            "available_count": len(available),
+            "status": "all",
+            "manifest_version": manifest_result.get("manifest_version"),
+            "last_sync": sync_status.get("last_sync"),
+            "repository_url": sync_status.get("repository_url"),
         })
 
 
@@ -448,32 +682,32 @@ class VDAIRCommunityProfileView(HomeAssistantView):
 
 
 class VDAIRSyncProfilesView(HomeAssistantView):
-    """API endpoint for syncing community profiles from GitHub."""
+    """API endpoint for fetching community profile manifest from GitHub."""
 
     url = "/api/vda_ir_control/sync_profiles"
     name = "api:vda_ir_control:sync_profiles"
     requires_auth = True
 
     async def post(self, request):
-        """Trigger sync of community profiles from GitHub.
+        """Fetch the manifest (list of available profiles) from GitHub.
 
-        Downloads the manifest and all profiles from the community repository.
-        Uses ETag for conditional requests to respect GitHub API rate limits.
+        Only downloads the manifest, not the actual profiles.
+        Profiles must be downloaded individually by the user.
         """
         hass = request.app["hass"]
         manager = get_profile_manager(hass)
 
-        _LOGGER.info("Starting community profile sync")
-        result = await manager.async_sync_community_profiles()
+        _LOGGER.info("Fetching community profile manifest")
+        result = await manager.async_fetch_manifest()
 
         if result["success"]:
             _LOGGER.info(
-                "Community profile sync completed: %s",
+                "Community profile manifest fetch completed: %s",
                 result["message"]
             )
         else:
             _LOGGER.warning(
-                "Community profile sync failed: %s",
+                "Community profile manifest fetch failed: %s",
                 result["message"]
             )
 
@@ -487,6 +721,106 @@ class VDAIRSyncProfilesView(HomeAssistantView):
 
         status = manager.get_sync_status()
         return self.json(status)
+
+
+class VDAIRAvailableProfilesView(HomeAssistantView):
+    """API endpoint for listing available community profiles from manifest."""
+
+    url = "/api/vda_ir_control/available_profiles"
+    name = "api:vda_ir_control:available_profiles"
+    requires_auth = True
+
+    async def get(self, request):
+        """Get list of available profiles from the manifest.
+
+        This shows what CAN be downloaded from GitHub.
+        Call POST /sync_profiles first to fetch the latest manifest.
+        """
+        hass = request.app["hass"]
+        manager = get_profile_manager(hass)
+        await manager.async_load()
+
+        # Fetch the latest manifest
+        manifest_result = await manager.async_fetch_manifest()
+
+        if not manifest_result["success"]:
+            return self.json({
+                "error": manifest_result["message"],
+                "profiles": [],
+                "total": 0,
+            }, status_code=500)
+
+        available = manifest_result.get("available_profiles", [])
+
+        # Get downloaded profiles to mark which are already downloaded
+        downloaded = manager.get_all_community_profiles()
+        downloaded_ids = {p["profile_id"] for p in downloaded}
+
+        # Mark which profiles are already downloaded
+        for profile in available:
+            profile_id = profile.get("profile_id") or profile.get("id")
+            profile["downloaded"] = profile_id in downloaded_ids
+
+        return self.json({
+            "profiles": available,
+            "total": len(available),
+            "downloaded_count": len(downloaded_ids),
+            "manifest_version": manifest_result.get("manifest_version"),
+        })
+
+
+class VDAIRDownloadProfileView(HomeAssistantView):
+    """API endpoint for downloading a specific community profile."""
+
+    url = "/api/vda_ir_control/download_profile/{profile_id}"
+    name = "api:vda_ir_control:download_profile"
+    requires_auth = True
+
+    async def post(self, request, profile_id):
+        """Download a specific profile from GitHub.
+
+        Args:
+            profile_id: The profile ID to download
+        """
+        hass = request.app["hass"]
+        manager = get_profile_manager(hass)
+
+        _LOGGER.info("Downloading community profile: %s", profile_id)
+        result = await manager.async_download_profile(profile_id)
+
+        if result["success"]:
+            _LOGGER.info("Successfully downloaded profile: %s", profile_id)
+        else:
+            _LOGGER.warning("Failed to download profile %s: %s", profile_id, result["message"])
+
+        return self.json(result)
+
+
+class VDAIRDeleteCommunityProfileView(HomeAssistantView):
+    """API endpoint for deleting a downloaded community profile."""
+
+    url = "/api/vda_ir_control/delete_community_profile/{profile_id}"
+    name = "api:vda_ir_control:delete_community_profile"
+    requires_auth = True
+
+    async def delete(self, request, profile_id):
+        """Delete a downloaded community profile.
+
+        Args:
+            profile_id: The profile ID to delete
+        """
+        hass = request.app["hass"]
+        manager = get_profile_manager(hass)
+
+        _LOGGER.info("Deleting community profile: %s", profile_id)
+        result = await manager.async_delete_profile(profile_id)
+
+        if result["success"]:
+            _LOGGER.info("Successfully deleted profile: %s", profile_id)
+        else:
+            _LOGGER.warning("Failed to delete profile %s: %s", profile_id, result["message"])
+
+        return self.json(result)
 
 
 class VDAIRExportProfileView(HomeAssistantView):
@@ -584,882 +918,6 @@ class VDAIRAllProfilesView(HomeAssistantView):
             },
             "sync_status": manager.get_sync_status(),
         })
-
-
-# ============================================================================
-# NETWORK DEVICE DRIVER API ENDPOINTS
-# ============================================================================
-
-
-class VDAIRDriversView(HomeAssistantView):
-    """API endpoint for all network device drivers."""
-
-    url = "/api/vda_ir_control/drivers"
-    name = "api:vda_ir_control:drivers"
-    requires_auth = True
-
-    async def get(self, request):
-        """Get all drivers from all sources.
-
-        Optional query parameters:
-        - device_type: Filter by device type (hdmi_matrix, projector, audio_receiver)
-        - source: Filter by source (builtin, community)
-        """
-        hass = request.app["hass"]
-        manager = get_driver_manager(hass)
-        await manager.async_load()
-
-        device_type = request.query.get("device_type")
-        source = request.query.get("source")
-
-        if device_type:
-            drivers = manager.get_drivers_by_type(device_type)
-        elif source == "builtin":
-            drivers = manager.get_all_builtin_drivers()
-        elif source == "community":
-            drivers = manager.get_all_community_drivers()
-        else:
-            drivers = manager.get_all_drivers()
-
-        return self.json({
-            "drivers": drivers,
-            "total": len(drivers),
-            "sync_status": manager.get_sync_status(),
-        })
-
-
-class VDAIRDriverView(HomeAssistantView):
-    """API endpoint for a single driver."""
-
-    url = "/api/vda_ir_control/drivers/{driver_id}"
-    name = "api:vda_ir_control:driver"
-    requires_auth = True
-
-    async def get(self, request, driver_id):
-        """Get a specific driver by ID."""
-        hass = request.app["hass"]
-        manager = get_driver_manager(hass)
-        await manager.async_load()
-
-        driver = manager.get_driver(driver_id)
-        if driver is None:
-            return self.json({"error": "Driver not found"}, status_code=404)
-
-        return self.json(driver)
-
-
-class VDAIRSyncDriversView(HomeAssistantView):
-    """API endpoint for syncing community drivers from GitHub."""
-
-    url = "/api/vda_ir_control/sync_drivers"
-    name = "api:vda_ir_control:sync_drivers"
-    requires_auth = True
-
-    async def post(self, request):
-        """Trigger sync of community drivers from GitHub."""
-        hass = request.app["hass"]
-        manager = get_driver_manager(hass)
-
-        _LOGGER.info("Starting community driver sync")
-        result = await manager.async_sync_community_drivers()
-
-        if result["success"]:
-            _LOGGER.info("Community driver sync completed: %s", result["message"])
-        else:
-            _LOGGER.warning("Community driver sync failed: %s", result["message"])
-
-        return self.json(result)
-
-    async def get(self, request):
-        """Get sync status without triggering a sync."""
-        hass = request.app["hass"]
-        manager = get_driver_manager(hass)
-        await manager.async_load()
-
-        status = manager.get_sync_status()
-        return self.json(status)
-
-
-class VDAIRCreateFromDriverView(HomeAssistantView):
-    """API endpoint for creating a network device from a driver template."""
-
-    url = "/api/vda_ir_control/create_from_driver"
-    name = "api:vda_ir_control:create_from_driver"
-    requires_auth = True
-
-    async def post(self, request):
-        """Create a network device from a driver template.
-
-        Required fields:
-        - driver_id: The driver ID to use as template
-        - device_id: Unique ID for the new device
-        - name: Display name for the device
-        - ip_address: IP address of the device
-
-        Optional fields:
-        - port: Port override (uses driver default if not specified)
-        - location: Location string
-        - matrix_inputs: List of input configurations
-        - matrix_outputs: List of output configurations
-        """
-        hass = request.app["hass"]
-        manager = get_driver_manager(hass)
-        storage = get_storage(hass)
-
-        await manager.async_load()
-
-        try:
-            data = await request.json()
-        except Exception:
-            return self.json({"error": "Invalid JSON"}, status_code=400)
-
-        # Validate required fields
-        required = ["driver_id", "device_id", "name", "ip_address"]
-        for field in required:
-            if field not in data:
-                return self.json({"error": f"Missing required field: {field}"}, status_code=400)
-
-        # Create device from driver
-        device = manager.create_network_device_from_driver(
-            driver_id=data["driver_id"],
-            device_id=data["device_id"],
-            name=data["name"],
-            ip_address=data["ip_address"],
-            port=data.get("port"),
-            location=data.get("location", ""),
-            matrix_inputs=data.get("matrix_inputs"),
-            matrix_outputs=data.get("matrix_outputs"),
-        )
-
-        if device is None:
-            return self.json({"error": "Driver not found"}, status_code=404)
-
-        # Save to storage
-        await storage.async_save_network_device(device)
-        _LOGGER.info("Created network device '%s' from driver '%s'", device.name, data["driver_id"])
-
-        # Setup coordinator and connect
-        try:
-            coordinator = await async_setup_network_coordinator(hass, device)
-            connected = coordinator.is_connected
-        except Exception as err:
-            _LOGGER.warning("Failed to connect to network device %s: %s", device.device_id, err)
-            connected = False
-
-        return self.json({
-            "success": True,
-            "device_id": device.device_id,
-            "driver_id": data["driver_id"],
-            "connected": connected,
-            "command_count": len(device.commands),
-        })
-
-
-class VDAIRGetRoutingCommandView(HomeAssistantView):
-    """API endpoint for getting matrix routing commands from a driver."""
-
-    url = "/api/vda_ir_control/drivers/{driver_id}/routing"
-    name = "api:vda_ir_control:driver_routing"
-    requires_auth = True
-
-    async def get(self, request, driver_id):
-        """Get the routing command for a matrix driver.
-
-        Query parameters:
-        - input: Input number (required)
-        - output: Output number (0 for all outputs)
-        """
-        hass = request.app["hass"]
-        manager = get_driver_manager(hass)
-        await manager.async_load()
-
-        input_num = request.query.get("input")
-        output_num = request.query.get("output", "0")
-
-        if not input_num:
-            return self.json({"error": "Missing required parameter: input"}, status_code=400)
-
-        try:
-            input_num = int(input_num)
-            output_num = int(output_num)
-        except ValueError:
-            return self.json({"error": "input and output must be integers"}, status_code=400)
-
-        command = manager.get_routing_command(driver_id, input_num, output_num)
-        if command is None:
-            return self.json({"error": "Driver not found or not a matrix driver"}, status_code=404)
-
-        return self.json({
-            "driver_id": driver_id,
-            "input": input_num,
-            "output": output_num,
-            "command": command,
-        })
-
-
-class VDAIRDiscoverDevicesView(HomeAssistantView):
-    """API endpoint for discovering network devices."""
-
-    url = "/api/vda_ir_control/discover_devices"
-    name = "api:vda_ir_control:discover_devices"
-    requires_auth = True
-
-    async def post(self, request):
-        """Run device discovery on the network.
-
-        Optional body parameters:
-        - subnet: Subnet to scan (e.g., "192.168.1")
-        - timeout: Timeout in seconds (default: 5.0)
-        """
-        hass = request.app["hass"]
-        service = get_discovery_service(hass)
-
-        try:
-            data = await request.json()
-        except Exception:
-            data = {}
-
-        subnet = data.get("subnet")
-        timeout = data.get("timeout", 5.0)
-
-        if service.is_scanning:
-            return self.json({
-                "error": "Discovery scan already in progress",
-                "is_scanning": True,
-            }, status_code=409)
-
-        _LOGGER.info("Starting device discovery (subnet=%s, timeout=%s)", subnet, timeout)
-
-        try:
-            devices = await service.async_discover_all(subnet=subnet, timeout=timeout)
-            return self.json({
-                "success": True,
-                "devices": [d.to_dict() for d in devices],
-                "total": len(devices),
-            })
-        except Exception as err:
-            _LOGGER.error("Discovery failed: %s", err)
-            return self.json({"error": str(err)}, status_code=500)
-
-    async def get(self, request):
-        """Get discovery status and cached results."""
-        hass = request.app["hass"]
-        service = get_discovery_service(hass)
-
-        return self.json({
-            "is_scanning": service.is_scanning,
-            "devices": [d.to_dict() for d in service.discovered_devices],
-            "total": len(service.discovered_devices),
-        })
-
-
-class VDAIRProbeDeviceView(HomeAssistantView):
-    """API endpoint for probing a specific device."""
-
-    url = "/api/vda_ir_control/probe_device"
-    name = "api:vda_ir_control:probe_device"
-    requires_auth = True
-
-    async def post(self, request):
-        """Probe a specific IP address to identify the device.
-
-        Required body parameters:
-        - ip_address: IP address to probe
-
-        Optional body parameters:
-        - port: Specific port to probe (if not specified, tries all known ports)
-        - timeout: Timeout in seconds (default: 5.0)
-        """
-        hass = request.app["hass"]
-        service = get_discovery_service(hass)
-
-        try:
-            data = await request.json()
-        except Exception:
-            return self.json({"error": "Invalid JSON"}, status_code=400)
-
-        if "ip_address" not in data:
-            return self.json({"error": "Missing required field: ip_address"}, status_code=400)
-
-        ip_address = data["ip_address"]
-        port = data.get("port")
-        timeout = data.get("timeout", 5.0)
-
-        _LOGGER.info("Probing device at %s:%s", ip_address, port or "all")
-
-        try:
-            device = await service.async_probe_device(
-                ip_address=ip_address,
-                port=port,
-                timeout=timeout,
-            )
-
-            if device:
-                return self.json({
-                    "success": True,
-                    "found": True,
-                    "device": device.to_dict(),
-                })
-            else:
-                return self.json({
-                    "success": True,
-                    "found": False,
-                    "message": f"No device found at {ip_address}",
-                })
-        except Exception as err:
-            _LOGGER.error("Probe failed: %s", err)
-            return self.json({"error": str(err)}, status_code=500)
-
-
-# ============================================================================
-# NETWORK DEVICE API ENDPOINTS
-# ============================================================================
-
-
-class VDAIRNetworkDevicesView(HomeAssistantView):
-    """API endpoint for network devices."""
-
-    url = "/api/vda_ir_control/network_devices"
-    name = "api:vda_ir_control:network_devices"
-    requires_auth = True
-
-    async def get(self, request):
-        """Get all network devices."""
-        hass = request.app["hass"]
-        storage = get_storage(hass)
-        devices = await storage.async_get_all_network_devices()
-
-        result = []
-        for device in devices:
-            coordinator = get_network_coordinator(hass, device.device_id)
-            result.append({
-                "device_id": device.device_id,
-                "name": device.name,
-                "device_type": device.device_type.value,
-                "transport_type": device.transport_type.value,
-                "host": device.network_config.host,
-                "port": device.network_config.port,
-                "protocol": device.network_config.protocol,
-                "location": device.location,
-                "connected": coordinator.is_connected if coordinator else False,
-                "command_count": len(device.commands),
-            })
-
-        return self.json({
-            "devices": result,
-            "total": len(result),
-        })
-
-    async def post(self, request):
-        """Create a new network device."""
-        hass = request.app["hass"]
-        storage = get_storage(hass)
-
-        try:
-            data = await request.json()
-        except Exception:
-            return self.json({"error": "Invalid JSON"}, status_code=400)
-
-        # Validate required fields
-        required = ["device_id", "name", "host", "port"]
-        for field in required:
-            if field not in data:
-                return self.json({"error": f"Missing required field: {field}"}, status_code=400)
-
-        network_config = NetworkConfig(
-            host=data["host"],
-            port=data["port"],
-            protocol=data.get("protocol", "tcp"),
-            timeout=data.get("timeout", 5.0),
-            persistent_connection=data.get("persistent_connection", True),
-        )
-
-        transport_type = (
-            TransportType.NETWORK_TCP
-            if network_config.protocol == "tcp"
-            else TransportType.NETWORK_UDP
-        )
-
-        device = NetworkDevice(
-            device_id=data["device_id"],
-            name=data["name"],
-            device_type=DeviceType(data.get("device_type", "custom")),
-            transport_type=transport_type,
-            location=data.get("location", ""),
-            network_config=network_config,
-        )
-
-        # If matrix_config is provided, auto-create routing commands
-        matrix_config = data.get("matrix_config")
-        if matrix_config and data.get("device_type") == "hdmi_matrix":
-            inputs = matrix_config.get("inputs", [])
-            outputs = matrix_config.get("outputs", [])
-            command_template = matrix_config.get("command_template", "")
-            line_ending_str = matrix_config.get("line_ending", "crlf")
-
-            # Map line ending string to enum
-            line_ending_map = {
-                "none": LineEnding.NONE,
-                "cr": LineEnding.CR,
-                "lf": LineEnding.LF,
-                "crlf": LineEnding.CRLF,
-            }
-            line_ending = line_ending_map.get(line_ending_str, LineEnding.CRLF)
-
-            # If we have a command template, generate routing commands for each input/output combo
-            if command_template and "{input}" in command_template and "{output}" in command_template:
-                # Generate routing commands: one for each output, each input is an option
-                for output_info in outputs:
-                    output_idx = output_info.get("index", 1)
-                    output_name = output_info.get("name", f"Output {output_idx}")
-
-                    for input_info in inputs:
-                        input_idx = input_info.get("index", 1)
-                        input_name = input_info.get("name", f"HDMI {input_idx}")
-
-                        # Generate the actual command by replacing placeholders
-                        payload = command_template.replace("{input}", str(input_idx)).replace("{output}", str(output_idx))
-
-                        command = DeviceCommand(
-                            command_id=f"route_in{input_idx}_out{output_idx}",
-                            name=f"{input_name} → {output_name}",
-                            format=CommandFormat.TEXT,
-                            payload=payload,
-                            line_ending=line_ending,
-                            is_input_option=True,  # Makes it appear in input selector
-                            input_value=str(input_idx),  # The input this command selects
-                        )
-                        device.add_command(command)
-
-                _LOGGER.info("Created %d routing commands from template for matrix device %s",
-                            len(inputs) * len(outputs), device.device_id)
-            else:
-                # No template - create placeholder input commands (old behavior)
-                for input_info in inputs:
-                    idx = input_info.get("index", 1)
-                    input_name = input_info.get("name", f"HDMI {idx}")
-                    command = DeviceCommand(
-                        command_id=f"input_{idx}",
-                        name=input_name,
-                        format=CommandFormat.TEXT,
-                        payload=f"input_{idx}",  # Placeholder - user will update with actual command
-                        line_ending=LineEnding.NONE,
-                        is_input_option=True,
-                        input_value=str(idx),
-                    )
-                    device.add_command(command)
-
-            # Create status query command(s) if provided
-            status_template = matrix_config.get("status_command", "")
-            if status_template:
-                if "{output}" in status_template:
-                    # Per-output status queries
-                    for output_info in outputs:
-                        output_idx = output_info.get("index", 1)
-                        output_name = output_info.get("name", f"Output {output_idx}")
-                        payload = status_template.replace("{output}", str(output_idx))
-
-                        status_cmd = DeviceCommand(
-                            command_id=f"query_status_out{output_idx}",
-                            name=f"Query {output_name} Status",
-                            format=CommandFormat.TEXT,
-                            payload=payload,
-                            line_ending=line_ending,
-                            is_query=True,
-                            state_key=f"output_{output_idx}_status",
-                        )
-                        device.add_command(status_cmd)
-                    _LOGGER.info("Created %d per-output status query commands for matrix device %s",
-                                len(outputs), device.device_id)
-                else:
-                    # Single global status query
-                    status_cmd = DeviceCommand(
-                        command_id="query_status",
-                        name="Query Status",
-                        format=CommandFormat.TEXT,
-                        payload=status_template,
-                        line_ending=line_ending,
-                        is_query=True,
-                        state_key="matrix_status",
-                    )
-                    device.add_command(status_cmd)
-                    _LOGGER.info("Created global status query command for matrix device %s", device.device_id)
-
-            # Store input/output configuration for matrix routing
-            from .models import MatrixInput, MatrixOutput
-            device.matrix_inputs = [
-                MatrixInput(index=i_info.get("index", i+1), name=i_info.get("name", f"Input {i+1}"))
-                for i, i_info in enumerate(inputs)
-            ]
-            device.matrix_outputs = [
-                MatrixOutput(index=o.get("index", i+1), name=o.get("name", f"Output {i+1}"))
-                for i, o in enumerate(outputs)
-            ]
-            _LOGGER.info("Created %d inputs and %d outputs for matrix device %s",
-                        len(inputs), len(outputs), device.device_id)
-
-        await storage.async_save_network_device(device)
-        _LOGGER.info("Created network device: %s", device.device_id)
-
-        # Setup coordinator
-        try:
-            coordinator = await async_setup_network_coordinator(hass, device)
-            connected = coordinator.is_connected
-        except Exception as err:
-            _LOGGER.warning("Failed to connect to network device %s: %s", device.device_id, err)
-            connected = False
-
-        return self.json({
-            "success": True,
-            "device_id": device.device_id,
-            "connected": connected,
-        })
-
-
-class VDAIRNetworkDeviceView(HomeAssistantView):
-    """API endpoint for a single network device."""
-
-    url = "/api/vda_ir_control/network_devices/{device_id}"
-    name = "api:vda_ir_control:network_device"
-    requires_auth = True
-
-    async def get(self, request, device_id):
-        """Get a single network device."""
-        hass = request.app["hass"]
-        storage = get_storage(hass)
-        device = await storage.async_get_network_device(device_id)
-
-        if device is None:
-            return self.json({"error": "Device not found"}, status_code=404)
-
-        coordinator = get_network_coordinator(hass, device.device_id)
-
-        return self.json({
-            "device_id": device.device_id,
-            "name": device.name,
-            "device_type": device.device_type.value,
-            "transport_type": device.transport_type.value,
-            "location": device.location,
-            "network_config": device.network_config.to_dict(),
-            "commands": {k: v.to_dict() for k, v in device.commands.items()},
-            "global_response_patterns": [p.to_dict() for p in device.global_response_patterns],
-            "matrix_inputs": [i.to_dict() for i in device.matrix_inputs],
-            "matrix_outputs": [o.to_dict() for o in device.matrix_outputs],
-            "connected": coordinator.is_connected if coordinator else False,
-            "device_state": coordinator.device_state.to_dict() if coordinator else None,
-        })
-
-    async def put(self, request, device_id):
-        """Update a network device (matrix I/O assignments)."""
-        hass = request.app["hass"]
-        storage = get_storage(hass)
-
-        device = await storage.async_get_network_device(device_id)
-        if device is None:
-            return self.json({"error": "Device not found"}, status_code=404)
-
-        try:
-            data = await request.json()
-        except Exception:
-            return self.json({"error": "Invalid JSON"}, status_code=400)
-
-        # Update matrix inputs if provided
-        if "matrix_inputs" in data:
-            from .models import MatrixInput
-            device.matrix_inputs = [
-                MatrixInput(
-                    index=i.get("index", idx+1),
-                    name=i.get("name", ""),
-                    device_id=i.get("device_id"),
-                )
-                for idx, i in enumerate(data["matrix_inputs"])
-            ]
-
-        # Update matrix outputs if provided
-        if "matrix_outputs" in data:
-            from .models import MatrixOutput
-            device.matrix_outputs = [
-                MatrixOutput(
-                    index=o.get("index", idx+1),
-                    name=o.get("name", ""),
-                    device_id=o.get("device_id"),
-                )
-                for idx, o in enumerate(data["matrix_outputs"])
-            ]
-
-        await storage.async_save_network_device(device)
-        _LOGGER.info("Updated network device: %s", device_id)
-
-        return self.json({"success": True})
-
-    async def delete(self, request, device_id):
-        """Delete a network device."""
-        hass = request.app["hass"]
-        storage = get_storage(hass)
-
-        # Check device exists
-        device = await storage.async_get_network_device(device_id)
-        if device is None:
-            return self.json({"error": "Device not found"}, status_code=404)
-
-        # Disconnect and remove coordinator
-        await async_remove_network_coordinator(hass, device_id)
-
-        # Delete from storage
-        await storage.async_delete_network_device(device_id)
-        _LOGGER.info("Deleted network device: %s", device_id)
-
-        return self.json({"success": True})
-
-
-class VDAIRNetworkDeviceCommandsView(HomeAssistantView):
-    """API endpoint for network device commands."""
-
-    url = "/api/vda_ir_control/network_devices/{device_id}/commands"
-    name = "api:vda_ir_control:network_device_commands"
-    requires_auth = True
-
-    async def get(self, request, device_id):
-        """Get all commands for a network device."""
-        hass = request.app["hass"]
-        storage = get_storage(hass)
-        device = await storage.async_get_network_device(device_id)
-
-        if device is None:
-            return self.json({"error": "Device not found"}, status_code=404)
-
-        return self.json({
-            "device_id": device_id,
-            "commands": {k: v.to_dict() for k, v in device.commands.items()},
-            "total": len(device.commands),
-        })
-
-    async def post(self, request, device_id):
-        """Add a command to a network device."""
-        hass = request.app["hass"]
-        storage = get_storage(hass)
-
-        device = await storage.async_get_network_device(device_id)
-        if device is None:
-            return self.json({"error": "Device not found"}, status_code=404)
-
-        try:
-            data = await request.json()
-        except Exception:
-            return self.json({"error": "Invalid JSON"}, status_code=400)
-
-        # Validate required fields
-        required = ["command_id", "name", "payload"]
-        for field in required:
-            if field not in data:
-                return self.json({"error": f"Missing required field: {field}"}, status_code=400)
-
-        # Build response patterns if provided
-        response_patterns = []
-        if data.get("response_pattern") and data.get("response_state_key"):
-            response_patterns.append(ResponsePattern(
-                pattern=data["response_pattern"],
-                state_key=data["response_state_key"],
-                value_group=data.get("value_group", 1),
-                value_map=data.get("value_map", {}),
-            ))
-
-        command = DeviceCommand(
-            command_id=data["command_id"],
-            name=data["name"],
-            format=CommandFormat(data.get("format", "text")),
-            payload=data["payload"],
-            line_ending=LineEnding(data.get("line_ending", "none")),
-            is_input_option=data.get("is_input_option", False),
-            input_value=data.get("input_value", ""),
-            is_query=data.get("is_query", False),
-            response_patterns=response_patterns,
-            poll_interval=data.get("poll_interval", 0.0),
-        )
-
-        await storage.async_add_command_to_network_device(device_id, command)
-        _LOGGER.info("Added command %s to network device %s", command.command_id, device_id)
-
-        return self.json({"success": True, "command_id": command.command_id})
-
-
-class VDAIRNetworkDeviceCommandView(HomeAssistantView):
-    """API endpoint for a single network device command."""
-
-    url = "/api/vda_ir_control/network_devices/{device_id}/commands/{command_id}"
-    name = "api:vda_ir_control:network_device_command"
-    requires_auth = True
-
-    async def delete(self, request, device_id, command_id):
-        """Delete a command from a network device."""
-        hass = request.app["hass"]
-        storage = get_storage(hass)
-
-        success = await storage.async_delete_command_from_network_device(device_id, command_id)
-        if not success:
-            return self.json({"error": "Command not found"}, status_code=404)
-
-        return self.json({"success": True})
-
-
-class VDAIRNetworkDeviceSendView(HomeAssistantView):
-    """API endpoint for sending commands to network devices."""
-
-    url = "/api/vda_ir_control/network_devices/{device_id}/send"
-    name = "api:vda_ir_control:network_device_send"
-    requires_auth = True
-
-    async def post(self, request, device_id):
-        """Send a command to a network device."""
-        hass = request.app["hass"]
-        storage = get_storage(hass)
-
-        try:
-            data = await request.json()
-        except Exception:
-            return self.json({"error": "Invalid JSON"}, status_code=400)
-
-        # Get or setup coordinator
-        coordinator = get_network_coordinator(hass, device_id)
-        if coordinator is None:
-            device = await storage.async_get_network_device(device_id)
-            if device is None:
-                return self.json({"error": "Device not found"}, status_code=404)
-            coordinator = await async_setup_network_coordinator(hass, device)
-
-        wait_for_response = data.get("wait_for_response", False)
-        timeout = data.get("timeout", 2.0)
-
-        # Check if sending a named command or raw payload
-        if "command_id" in data:
-            command = coordinator.device.get_command(data["command_id"])
-            if command is None:
-                return self.json({"error": "Command not found"}, status_code=404)
-
-            try:
-                response = await coordinator.async_send_command(command, wait_for_response, timeout)
-                return self.json({
-                    "success": True,
-                    "command_id": data["command_id"],
-                    "response": response,
-                })
-            except Exception as err:
-                return self.json({"error": str(err)}, status_code=500)
-
-        elif "payload" in data:
-            # Send raw command
-            try:
-                response = await coordinator.async_send_raw(
-                    data["payload"],
-                    data.get("format", "text"),
-                    data.get("line_ending", "none"),
-                    wait_for_response,
-                    timeout,
-                )
-                return self.json({
-                    "success": True,
-                    "response": response,
-                })
-            except Exception as err:
-                return self.json({"error": str(err)}, status_code=500)
-
-        else:
-            return self.json({"error": "Must provide command_id or payload"}, status_code=400)
-
-
-class VDAIRNetworkDeviceStateView(HomeAssistantView):
-    """API endpoint for network device state."""
-
-    url = "/api/vda_ir_control/network_devices/{device_id}/state"
-    name = "api:vda_ir_control:network_device_state"
-    requires_auth = True
-
-    async def get(self, request, device_id):
-        """Get current state of a network device."""
-        hass = request.app["hass"]
-
-        coordinator = get_network_coordinator(hass, device_id)
-        if coordinator is None:
-            return self.json({"error": "Device not connected"}, status_code=404)
-
-        return self.json({
-            "device_id": device_id,
-            "connected": coordinator.is_connected,
-            "state": coordinator.device_state.to_dict(),
-        })
-
-
-class VDAIRTestConnectionView(HomeAssistantView):
-    """API endpoint for testing network connections."""
-
-    url = "/api/vda_ir_control/test_connection"
-    name = "api:vda_ir_control:test_connection"
-    requires_auth = True
-
-    async def post(self, request):
-        """Test a network connection."""
-        import asyncio
-
-        try:
-            data = await request.json()
-        except Exception:
-            return self.json({"error": "Invalid JSON"}, status_code=400)
-
-        required = ["host", "port"]
-        for field in required:
-            if field not in data:
-                return self.json({"error": f"Missing required field: {field}"}, status_code=400)
-
-        host = data["host"]
-        port = data["port"]
-        protocol = data.get("protocol", "tcp")
-        timeout = data.get("timeout", 5.0)
-
-        try:
-            if protocol == "tcp":
-                reader, writer = await asyncio.wait_for(
-                    asyncio.open_connection(host, port),
-                    timeout=timeout,
-                )
-                writer.close()
-                await writer.wait_closed()
-                return self.json({
-                    "success": True,
-                    "host": host,
-                    "port": port,
-                    "protocol": protocol,
-                    "message": "TCP connection successful",
-                })
-            else:
-                loop = asyncio.get_event_loop()
-                transport, _ = await loop.create_datagram_endpoint(
-                    asyncio.DatagramProtocol,
-                    remote_addr=(host, port),
-                )
-                transport.close()
-                return self.json({
-                    "success": True,
-                    "host": host,
-                    "port": port,
-                    "protocol": protocol,
-                    "message": "UDP endpoint created successfully",
-                })
-        except asyncio.TimeoutError:
-            return self.json({
-                "success": False,
-                "host": host,
-                "port": port,
-                "protocol": protocol,
-                "message": f"Connection timeout after {timeout}s",
-            })
-        except OSError as err:
-            return self.json({
-                "success": False,
-                "host": host,
-                "port": port,
-                "protocol": protocol,
-                "message": f"Connection failed: {err}",
-            })
 
 
 # ============================================================================
@@ -1920,6 +1378,7 @@ async def async_setup_api(hass: HomeAssistant) -> None:
     hass.http.register_view(VDAIRProfilesView())
     hass.http.register_view(VDAIRProfileView())
     hass.http.register_view(VDAIRDevicesView())
+    hass.http.register_view(VDAIRDeviceView())
     hass.http.register_view(VDAIRPortsView())
     hass.http.register_view(VDAIRCommandsView())
     hass.http.register_view(VDAIRLearningStatusView())
@@ -1932,28 +1391,11 @@ async def async_setup_api(hass: HomeAssistant) -> None:
     hass.http.register_view(VDAIRCommunityProfilesView())
     hass.http.register_view(VDAIRCommunityProfileView())
     hass.http.register_view(VDAIRSyncProfilesView())
+    hass.http.register_view(VDAIRAvailableProfilesView())
+    hass.http.register_view(VDAIRDownloadProfileView())
+    hass.http.register_view(VDAIRDeleteCommunityProfileView())
     hass.http.register_view(VDAIRExportProfileView())
     hass.http.register_view(VDAIRAllProfilesView())
-
-    # Network device driver endpoints
-    hass.http.register_view(VDAIRDriversView())
-    hass.http.register_view(VDAIRDriverView())
-    hass.http.register_view(VDAIRSyncDriversView())
-    hass.http.register_view(VDAIRCreateFromDriverView())
-    hass.http.register_view(VDAIRGetRoutingCommandView())
-
-    # Discovery endpoints
-    hass.http.register_view(VDAIRDiscoverDevicesView())
-    hass.http.register_view(VDAIRProbeDeviceView())
-
-    # Network device endpoints
-    hass.http.register_view(VDAIRNetworkDevicesView())
-    hass.http.register_view(VDAIRNetworkDeviceView())
-    hass.http.register_view(VDAIRNetworkDeviceCommandsView())
-    hass.http.register_view(VDAIRNetworkDeviceCommandView())
-    hass.http.register_view(VDAIRNetworkDeviceSendView())
-    hass.http.register_view(VDAIRNetworkDeviceStateView())
-    hass.http.register_view(VDAIRTestConnectionView())
 
     # Serial device endpoints
     hass.http.register_view(VDAIRSerialPortsView())

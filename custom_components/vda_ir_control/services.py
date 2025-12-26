@@ -14,8 +14,6 @@ from .device_types import DeviceType, TransportType, CommandFormat, LineEnding, 
 from .models import (
     DeviceProfile,
     ControlledDevice,
-    NetworkDevice,
-    NetworkConfig,
     SerialDevice,
     SerialConfig,
     DeviceCommand,
@@ -24,11 +22,6 @@ from .models import (
 from .storage import get_storage
 from .ir_profiles import get_profile_by_id as get_builtin_profile
 from .profile_manager import get_profile_manager
-from .network_coordinator import (
-    get_network_coordinator,
-    async_setup_network_coordinator,
-    async_remove_network_coordinator,
-)
 from .serial_coordinator import (
     get_serial_coordinator,
     async_setup_serial_coordinator,
@@ -55,7 +48,7 @@ TEST_OUTPUT_SCHEMA = vol.Schema({
 })
 
 DISCOVER_BOARDS_SCHEMA = vol.Schema({
-    vol.Optional("subnet", default="192.168.1"): str,
+    vol.Optional("subnet"): str,
 })
 
 GET_BOARD_STATUS_SCHEMA = vol.Schema({
@@ -149,73 +142,6 @@ CONFIGURE_PORT_SCHEMA = vol.Schema({
 
 GET_PORTS_SCHEMA = vol.Schema({
     vol.Required("board_id"): str,
-})
-
-# ========== Network Device Schemas ==========
-
-CREATE_NETWORK_DEVICE_SCHEMA = vol.Schema({
-    vol.Required("device_id"): str,
-    vol.Required("name"): str,
-    vol.Required("host"): str,
-    vol.Required("port"): vol.Range(min=1, max=65535),
-    vol.Optional("protocol", default="tcp"): vol.In(["tcp", "udp"]),
-    vol.Optional("device_type", default="custom"): vol.In([dt.value for dt in DeviceType]),
-    vol.Optional("location", default=""): str,
-    vol.Optional("timeout", default=5.0): float,
-    vol.Optional("persistent_connection", default=True): bool,
-})
-
-DELETE_NETWORK_DEVICE_SCHEMA = vol.Schema({
-    vol.Required("device_id"): str,
-})
-
-LIST_NETWORK_DEVICES_SCHEMA = vol.Schema({})
-
-GET_NETWORK_DEVICE_SCHEMA = vol.Schema({
-    vol.Required("device_id"): str,
-})
-
-ADD_NETWORK_COMMAND_SCHEMA = vol.Schema({
-    vol.Required("device_id"): str,
-    vol.Required("command_id"): str,
-    vol.Required("name"): str,
-    vol.Required("payload"): str,
-    vol.Optional("format", default="text"): vol.In(["text", "hex"]),
-    vol.Optional("line_ending", default="none"): vol.In(["none", "cr", "lf", "crlf", "!"]),
-    vol.Optional("is_input_option", default=False): bool,
-    vol.Optional("input_value", default=""): str,
-    vol.Optional("is_query", default=False): bool,
-    vol.Optional("response_pattern", default=""): str,
-    vol.Optional("response_state_key", default=""): str,
-    vol.Optional("poll_interval", default=0.0): float,
-})
-
-DELETE_NETWORK_COMMAND_SCHEMA = vol.Schema({
-    vol.Required("device_id"): str,
-    vol.Required("command_id"): str,
-})
-
-SEND_NETWORK_COMMAND_SCHEMA = vol.Schema({
-    vol.Required("device_id"): str,
-    vol.Required("command_id"): str,
-    vol.Optional("wait_for_response", default=False): bool,
-    vol.Optional("timeout", default=2.0): float,
-})
-
-SEND_RAW_NETWORK_COMMAND_SCHEMA = vol.Schema({
-    vol.Required("device_id"): str,
-    vol.Required("payload"): str,
-    vol.Optional("format", default="text"): vol.In(["text", "hex"]),
-    vol.Optional("line_ending", default="none"): vol.In(["none", "cr", "lf", "crlf", "!"]),
-    vol.Optional("wait_for_response", default=False): bool,
-    vol.Optional("timeout", default=2.0): float,
-})
-
-TEST_NETWORK_CONNECTION_SCHEMA = vol.Schema({
-    vol.Required("host"): str,
-    vol.Required("port"): vol.Range(min=1, max=65535),
-    vol.Optional("protocol", default="tcp"): vol.In(["tcp", "udp"]),
-    vol.Optional("timeout", default=5.0): float,
 })
 
 # ========== Serial Device Schemas ==========
@@ -340,7 +266,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
 
     async def handle_discover_boards(call: ServiceCall) -> Dict[str, Any]:
         """Handle discover boards service."""
-        subnet = call.data["subnet"]
+        subnet = call.data.get("subnet")  # None if not provided, triggers auto-detection
 
         discovery = VDAIRDiscoveryCoordinator(hass)
         boards = await discovery.discover_boards(subnet)
@@ -591,8 +517,11 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         if profile_id.startswith("builtin:"):
             builtin_id = profile_id[8:]  # Remove "builtin:" prefix
             builtin_profile = get_builtin_profile(builtin_id)
+            # If not in builtin, check community profiles (downloaded profiles appear as builtin)
             if builtin_profile is None:
-                raise ServiceValidationError(f"Built-in profile '{builtin_id}' not found")
+                community_profile = profile_manager.get_community_profile(builtin_id)
+                if community_profile is None:
+                    raise ServiceValidationError(f"Profile '{builtin_id}' not found in builtin or community profiles")
             # Use the builtin profile ID as-is
             device_profile_id = profile_id
         elif profile_id.startswith("community:"):
@@ -686,8 +615,13 @@ async def async_setup_services(hass: HomeAssistant) -> None:
             if profile_id.startswith("builtin:"):
                 builtin_id = profile_id[8:]
                 builtin_profile = get_builtin_profile(builtin_id)
+                # If not in builtin, check community profiles (downloaded profiles appear as builtin)
                 if builtin_profile is None:
-                    raise ServiceValidationError(f"Built-in profile '{builtin_id}' not found")
+                    profile_manager = get_profile_manager(hass)
+                    await profile_manager.async_load()
+                    community_profile = profile_manager.get_community_profile(builtin_id)
+                    if community_profile is None:
+                        raise ServiceValidationError(f"Profile '{builtin_id}' not found in builtin or community profiles")
             elif profile_id.startswith("community:"):
                 community_id = profile_id[10:]
                 profile_manager = get_profile_manager(hass)
@@ -766,16 +700,33 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         if profile_id.startswith("builtin:"):
             builtin_id = profile_id[8:]  # Remove "builtin:" prefix
             builtin_profile = get_builtin_profile(builtin_id)
+
+            # If not in builtin, check community profiles (downloaded profiles appear as builtin)
             if builtin_profile is None:
-                raise ServiceValidationError(f"Built-in profile '{builtin_id}' not found")
+                profile_manager = get_profile_manager(hass)
+                await profile_manager.async_load()
+                builtin_profile = profile_manager.get_community_profile(builtin_id)
+                if builtin_profile is None:
+                    raise ServiceValidationError(f"Profile '{builtin_id}' not found in builtin or community profiles")
 
             # Get IR code from built-in profile
+            # Check for raw_codes first (more reliable for some devices)
+            raw_codes = builtin_profile.get("raw_codes", {})
             codes = builtin_profile.get("codes", {})
-            if command not in codes:
-                raise ServiceValidationError(f"Command '{command}' not found in built-in profile")
 
-            ir_code_data = codes[command]
-            protocol = builtin_profile.get("protocol", "NEC")
+            if command in raw_codes:
+                # Use raw timing data
+                ir_code_data = codes.get(command, "0")  # Hex code as fallback identifier
+                protocol = "raw"
+                raw_data = raw_codes[command]
+                frequency = builtin_profile.get("frequency", 38000)
+            elif command in codes:
+                ir_code_data = codes[command]
+                protocol = builtin_profile.get("protocol", "NEC")
+                raw_data = None
+                frequency = None
+            else:
+                raise ServiceValidationError(f"Command '{command}' not found in built-in profile")
 
         elif profile_id.startswith("community:"):
             community_id = profile_id[10:]  # Remove "community:" prefix
@@ -786,12 +737,23 @@ async def async_setup_services(hass: HomeAssistant) -> None:
                 raise ServiceValidationError(f"Community profile '{community_id}' not found")
 
             # Get IR code from community profile (same format as built-in)
+            # Check for raw_codes first (more reliable for some devices)
+            raw_codes = community_profile.get("raw_codes", {})
             codes = community_profile.get("codes", {})
-            if command not in codes:
-                raise ServiceValidationError(f"Command '{command}' not found in community profile")
 
-            ir_code_data = codes[command]
-            protocol = community_profile.get("protocol", "NEC")
+            if command in raw_codes:
+                # Use raw timing data
+                ir_code_data = codes.get(command, "0")  # Hex code as fallback identifier
+                protocol = "raw"
+                raw_data = raw_codes[command]
+                frequency = community_profile.get("frequency", 38000)
+            elif command in codes:
+                ir_code_data = codes[command]
+                protocol = community_profile.get("protocol", "NEC")
+                raw_data = None
+                frequency = None
+            else:
+                raise ServiceValidationError(f"Command '{command}' not found in community profile")
 
         else:
             # Get user profile
@@ -806,13 +768,15 @@ async def async_setup_services(hass: HomeAssistant) -> None:
 
             ir_code_data = ir_code.raw_code
             protocol = ir_code.protocol
+            raw_data = None
+            frequency = None
 
         # Get coordinator and send
         coordinator = _get_board_coordinator(device.board_id)
         if coordinator is None:
             raise ServiceValidationError(f"Board '{device.board_id}' not found")
 
-        success = await coordinator.send_ir_code(device.output_port, ir_code_data, protocol)
+        success = await coordinator.send_ir_code(device.output_port, ir_code_data, protocol, raw_data, frequency)
 
         if not success:
             raise ServiceValidationError(f"Failed to send command to device")
@@ -866,276 +830,6 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         except Exception as err:
             _LOGGER.error("Failed to get ports: %s", err)
             raise ServiceValidationError(f"Failed to get ports: {err}")
-
-    # ========== Network Device Services ==========
-
-    async def handle_create_network_device(call: ServiceCall) -> Dict[str, Any]:
-        """Handle create_network_device service."""
-        storage = get_storage(hass)
-
-        network_config = NetworkConfig(
-            host=call.data["host"],
-            port=call.data["port"],
-            protocol=call.data.get("protocol", "tcp"),
-            timeout=call.data.get("timeout", 5.0),
-            persistent_connection=call.data.get("persistent_connection", True),
-        )
-
-        transport_type = (
-            TransportType.NETWORK_TCP
-            if network_config.protocol == "tcp"
-            else TransportType.NETWORK_UDP
-        )
-
-        device = NetworkDevice(
-            device_id=call.data["device_id"],
-            name=call.data["name"],
-            device_type=DeviceType(call.data.get("device_type", "custom")),
-            transport_type=transport_type,
-            location=call.data.get("location", ""),
-            network_config=network_config,
-        )
-
-        await storage.async_save_network_device(device)
-        _LOGGER.info("Created network device: %s", device.device_id)
-
-        # Setup coordinator and connect
-        try:
-            coordinator = await async_setup_network_coordinator(hass, device)
-            connected = coordinator.is_connected
-        except Exception as err:
-            _LOGGER.warning("Failed to connect to network device %s: %s", device.device_id, err)
-            connected = False
-
-        return {
-            "success": True,
-            "device_id": device.device_id,
-            "connected": connected,
-        }
-
-    async def handle_delete_network_device(call: ServiceCall) -> Dict[str, Any]:
-        """Handle delete_network_device service."""
-        storage = get_storage(hass)
-        device_id = call.data["device_id"]
-
-        # Disconnect and remove coordinator
-        await async_remove_network_coordinator(hass, device_id)
-
-        # Delete from storage
-        await storage.async_delete_network_device(device_id)
-        _LOGGER.info("Deleted network device: %s", device_id)
-
-        return {"success": True}
-
-    async def handle_list_network_devices(call: ServiceCall) -> Dict[str, Any]:
-        """Handle list_network_devices service."""
-        storage = get_storage(hass)
-        devices = await storage.async_get_all_network_devices()
-
-        result = []
-        for device in devices:
-            coordinator = get_network_coordinator(hass, device.device_id)
-            result.append({
-                "device_id": device.device_id,
-                "name": device.name,
-                "device_type": device.device_type.value,
-                "host": device.network_config.host,
-                "port": device.network_config.port,
-                "protocol": device.network_config.protocol,
-                "location": device.location,
-                "connected": coordinator.is_connected if coordinator else False,
-                "command_count": len(device.commands),
-            })
-
-        return {"devices": result, "total": len(result)}
-
-    async def handle_get_network_device(call: ServiceCall) -> Dict[str, Any]:
-        """Handle get_network_device service."""
-        storage = get_storage(hass)
-        device = await storage.async_get_network_device(call.data["device_id"])
-
-        if device is None:
-            raise ServiceValidationError(f"Network device '{call.data['device_id']}' not found")
-
-        coordinator = get_network_coordinator(hass, device.device_id)
-
-        return {
-            "device_id": device.device_id,
-            "name": device.name,
-            "device_type": device.device_type.value,
-            "transport_type": device.transport_type.value,
-            "location": device.location,
-            "network_config": device.network_config.to_dict(),
-            "commands": {k: v.to_dict() for k, v in device.commands.items()},
-            "connected": coordinator.is_connected if coordinator else False,
-            "device_state": coordinator.device_state.to_dict() if coordinator else None,
-        }
-
-    async def handle_add_network_command(call: ServiceCall) -> Dict[str, Any]:
-        """Handle add_network_command service."""
-        storage = get_storage(hass)
-        device_id = call.data["device_id"]
-
-        device = await storage.async_get_network_device(device_id)
-        if device is None:
-            raise ServiceValidationError(f"Network device '{device_id}' not found")
-
-        # Build response patterns if provided
-        response_patterns = []
-        if call.data.get("response_pattern") and call.data.get("response_state_key"):
-            response_patterns.append(ResponsePattern(
-                pattern=call.data["response_pattern"],
-                state_key=call.data["response_state_key"],
-            ))
-
-        command = DeviceCommand(
-            command_id=call.data["command_id"],
-            name=call.data["name"],
-            format=CommandFormat(call.data.get("format", "text")),
-            payload=call.data["payload"],
-            line_ending=LineEnding(call.data.get("line_ending", "none")),
-            is_input_option=call.data.get("is_input_option", False),
-            input_value=call.data.get("input_value", ""),
-            is_query=call.data.get("is_query", False),
-            response_patterns=response_patterns,
-            poll_interval=call.data.get("poll_interval", 0.0),
-        )
-
-        await storage.async_add_command_to_network_device(device_id, command)
-        _LOGGER.info("Added command %s to network device %s", command.command_id, device_id)
-
-        return {"success": True, "command_id": command.command_id}
-
-    async def handle_delete_network_command(call: ServiceCall) -> Dict[str, Any]:
-        """Handle delete_network_command service."""
-        storage = get_storage(hass)
-        device_id = call.data["device_id"]
-        command_id = call.data["command_id"]
-
-        success = await storage.async_delete_command_from_network_device(device_id, command_id)
-        if not success:
-            raise ServiceValidationError(f"Command '{command_id}' not found in device '{device_id}'")
-
-        return {"success": True}
-
-    async def handle_send_network_command(call: ServiceCall) -> Dict[str, Any]:
-        """Handle send_network_command service."""
-        device_id = call.data["device_id"]
-        command_id = call.data["command_id"]
-        wait_for_response = call.data.get("wait_for_response", False)
-        timeout = call.data.get("timeout", 2.0)
-
-        # Get coordinator
-        coordinator = get_network_coordinator(hass, device_id)
-        if coordinator is None:
-            # Try to load from storage and setup
-            storage = get_storage(hass)
-            device = await storage.async_get_network_device(device_id)
-            if device is None:
-                raise ServiceValidationError(f"Network device '{device_id}' not found")
-            coordinator = await async_setup_network_coordinator(hass, device)
-
-        # Get command
-        command = coordinator.device.get_command(command_id)
-        if command is None:
-            raise ServiceValidationError(f"Command '{command_id}' not found")
-
-        try:
-            response = await coordinator.async_send_command(command, wait_for_response, timeout)
-            return {
-                "success": True,
-                "device_id": device_id,
-                "command_id": command_id,
-                "response": response,
-            }
-        except Exception as err:
-            raise ServiceValidationError(f"Failed to send command: {err}")
-
-    async def handle_send_raw_network_command(call: ServiceCall) -> Dict[str, Any]:
-        """Handle send_raw_network_command service."""
-        device_id = call.data["device_id"]
-        payload = call.data["payload"]
-        format_type = call.data.get("format", "text")
-        line_ending = call.data.get("line_ending", "none")
-        wait_for_response = call.data.get("wait_for_response", False)
-        timeout = call.data.get("timeout", 2.0)
-
-        # Get coordinator
-        coordinator = get_network_coordinator(hass, device_id)
-        if coordinator is None:
-            storage = get_storage(hass)
-            device = await storage.async_get_network_device(device_id)
-            if device is None:
-                raise ServiceValidationError(f"Network device '{device_id}' not found")
-            coordinator = await async_setup_network_coordinator(hass, device)
-
-        try:
-            response = await coordinator.async_send_raw(
-                payload, format_type, line_ending, wait_for_response, timeout
-            )
-            return {
-                "success": True,
-                "device_id": device_id,
-                "response": response,
-            }
-        except Exception as err:
-            raise ServiceValidationError(f"Failed to send command: {err}")
-
-    async def handle_test_network_connection(call: ServiceCall) -> Dict[str, Any]:
-        """Handle test_network_connection service."""
-        import asyncio
-
-        host = call.data["host"]
-        port = call.data["port"]
-        protocol = call.data.get("protocol", "tcp")
-        timeout = call.data.get("timeout", 5.0)
-
-        try:
-            if protocol == "tcp":
-                reader, writer = await asyncio.wait_for(
-                    asyncio.open_connection(host, port),
-                    timeout=timeout,
-                )
-                writer.close()
-                await writer.wait_closed()
-                return {
-                    "success": True,
-                    "host": host,
-                    "port": port,
-                    "protocol": protocol,
-                    "message": "TCP connection successful",
-                }
-            else:
-                # UDP - just verify we can create the endpoint
-                loop = asyncio.get_event_loop()
-                transport, _ = await loop.create_datagram_endpoint(
-                    asyncio.DatagramProtocol,
-                    remote_addr=(host, port),
-                )
-                transport.close()
-                return {
-                    "success": True,
-                    "host": host,
-                    "port": port,
-                    "protocol": protocol,
-                    "message": "UDP endpoint created successfully",
-                }
-        except asyncio.TimeoutError:
-            return {
-                "success": False,
-                "host": host,
-                "port": port,
-                "protocol": protocol,
-                "message": f"Connection timeout after {timeout}s",
-            }
-        except OSError as err:
-            return {
-                "success": False,
-                "host": host,
-                "port": port,
-                "protocol": protocol,
-                "message": f"Connection failed: {err}",
-            }
 
     # ========== Serial Device Services ==========
 
@@ -1447,44 +1141,6 @@ async def async_setup_services(hass: HomeAssistant) -> None:
     hass.services.async_register(
         DOMAIN, "get_ports", handle_get_ports,
         schema=GET_PORTS_SCHEMA, supports_response=SupportsResponse.ONLY
-    )
-
-    # Network device services
-    hass.services.async_register(
-        DOMAIN, "create_network_device", handle_create_network_device,
-        schema=CREATE_NETWORK_DEVICE_SCHEMA, supports_response=SupportsResponse.OPTIONAL
-    )
-    hass.services.async_register(
-        DOMAIN, "delete_network_device", handle_delete_network_device,
-        schema=DELETE_NETWORK_DEVICE_SCHEMA, supports_response=SupportsResponse.OPTIONAL
-    )
-    hass.services.async_register(
-        DOMAIN, "list_network_devices", handle_list_network_devices,
-        schema=LIST_NETWORK_DEVICES_SCHEMA, supports_response=SupportsResponse.ONLY
-    )
-    hass.services.async_register(
-        DOMAIN, "get_network_device", handle_get_network_device,
-        schema=GET_NETWORK_DEVICE_SCHEMA, supports_response=SupportsResponse.ONLY
-    )
-    hass.services.async_register(
-        DOMAIN, "add_network_command", handle_add_network_command,
-        schema=ADD_NETWORK_COMMAND_SCHEMA, supports_response=SupportsResponse.OPTIONAL
-    )
-    hass.services.async_register(
-        DOMAIN, "delete_network_command", handle_delete_network_command,
-        schema=DELETE_NETWORK_COMMAND_SCHEMA, supports_response=SupportsResponse.OPTIONAL
-    )
-    hass.services.async_register(
-        DOMAIN, "send_network_command", handle_send_network_command,
-        schema=SEND_NETWORK_COMMAND_SCHEMA, supports_response=SupportsResponse.OPTIONAL
-    )
-    hass.services.async_register(
-        DOMAIN, "send_raw_network_command", handle_send_raw_network_command,
-        schema=SEND_RAW_NETWORK_COMMAND_SCHEMA, supports_response=SupportsResponse.OPTIONAL
-    )
-    hass.services.async_register(
-        DOMAIN, "test_network_connection", handle_test_network_connection,
-        schema=TEST_NETWORK_CONNECTION_SCHEMA, supports_response=SupportsResponse.ONLY
     )
 
     # Serial device services

@@ -28,6 +28,7 @@ class CommandFormat(str, Enum):
     IR_CODE = "ir_code"    # IR protocol code (existing)
     TEXT = "text"          # Text string (ASCII)
     HEX = "hex"            # Hex/binary data (e.g., "A5 01 02 FF")
+    EISCP = "eiscp"        # Onkyo eISCP protocol (binary with header)
 
 
 # Line endings for text commands

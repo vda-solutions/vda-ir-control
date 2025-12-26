@@ -9,6 +9,7 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
 from .const import DOMAIN
 
@@ -26,67 +27,129 @@ class VdaIrControlConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def __init__(self) -> None:
         """Initialize the config flow."""
         self.discovered_boards: dict[str, dict[str, Any]] = {}
-        self.selected_board: dict[str, Any] | None = None
+
+    async def async_step_zeroconf(
+        self, discovery_info: ZeroconfServiceInfo
+    ) -> FlowResult:
+        """Handle zeroconf discovery."""
+        _LOGGER.info("Zeroconf discovery triggered for: %s", discovery_info.hostname)
+
+        # Get IP address from discovery info
+        host = discovery_info.host
+
+        # Check if this is actually a VDA IR board
+        board_info = await self._check_board(host)
+
+        if not board_info:
+            _LOGGER.debug("Device at %s is not a VDA IR board", host)
+            return self.async_abort(reason="not_vda_ir_board")
+
+        mac_address = board_info.get("mac_address", "")
+        board_name = board_info.get("board_name", "IR Board")
+        board_id = board_info.get("board_id", "")
+
+        # Check if already configured
+        await self.async_set_unique_id(mac_address)
+        self._abort_if_unique_id_configured(updates={"ip_address": host})
+
+        # Store discovered board info in context
+        self.context["board_info"] = board_info
+        self.context["title_placeholders"] = {
+            "name": board_name,
+            "ip": host,
+        }
+
+        _LOGGER.info("Discovered VDA IR board: %s at %s", board_name, host)
+
+        # Show confirmation form
+        return self.async_show_form(
+            step_id="zeroconf_confirm",
+            data_schema=vol.Schema({}),
+            description_placeholders={
+                "name": board_name,
+                "ip": host,
+                "mac": mac_address,
+            },
+        )
+
+    async def async_step_zeroconf_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Handle zeroconf confirmation - create entry directly."""
+        board_info = self.context.get("board_info")
+        if not board_info:
+            return self.async_abort(reason="no_board_selected")
+
+        if user_input is not None:
+            # Create entry directly without calling adopt endpoint
+            mac_address = board_info.get("mac_address", "")
+            ip_address = board_info.get("ip_address", "")
+            board_name = board_info.get("board_name", "IR Board")
+            board_id = board_info.get("board_id", "ir_board")
+
+            return self.async_create_entry(
+                title=board_name,
+                data={
+                    "board_id": board_id,
+                    "board_name": board_name,
+                    "ip_address": ip_address,
+                    "mac_address": mac_address,
+                    "port": 80,
+                    "output_count": board_info.get("output_count", 5),
+                },
+            )
+
+        # Show form again
+        return self.async_show_form(
+            step_id="zeroconf_confirm",
+            data_schema=vol.Schema({}),
+            description_placeholders={
+                "name": board_info.get("board_name", "IR Board"),
+                "ip": board_info.get("ip_address", "Unknown"),
+                "mac": board_info.get("mac_address", "Unknown"),
+            },
+        )
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Handle the initial step - choose discovery or manual entry."""
-        if user_input is not None:
-            if user_input.get("setup_method") == "manual":
-                return await self.async_step_manual()
-            # Default to discovery
-            return await self.async_step_discover()
-
-        return self.async_show_form(
-            step_id="user",
-            data_schema=vol.Schema(
-                {
-                    vol.Required("setup_method", default="discover"): vol.In(
-                        {
-                            "discover": "Discover boards on network",
-                            "manual": "Enter IP address manually",
-                        }
-                    ),
-                }
-            ),
-            description_placeholders={},
-        )
-
-    async def async_step_discover(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
-        """Handle board discovery step."""
+        """Handle the initial step - auto-discover boards and show with manual option."""
         errors = {}
 
         if user_input is not None:
-            # User selected a board
-            selected_mac = user_input.get("board")
-            if selected_mac and selected_mac in self.discovered_boards:
-                self.selected_board = self.discovered_boards[selected_mac]
+            selected = user_input.get("board")
+            if selected == "_manual_":
+                return await self.async_step_manual()
+            elif selected and selected in self.discovered_boards:
+                self.context["board_info"] = self.discovered_boards[selected]
                 return await self.async_step_adopt()
             errors["base"] = "no_board_selected"
 
         # Perform discovery
         self.discovered_boards = await self._discover_boards()
 
-        if not self.discovered_boards:
-            return self.async_abort(reason="no_boards_found")
+        # Build selection options - discovered boards + manual option
+        board_options = {}
+        for mac, info in self.discovered_boards.items():
+            board_options[mac] = f"{info.get('board_name', 'Unknown')} ({info.get('ip_address', 'Unknown IP')})"
 
-        # Build selection options
-        board_options = {
-            mac: f"{info.get('board_name', 'Unknown')} ({info.get('ip_address', 'Unknown IP')})"
-            for mac, info in self.discovered_boards.items()
-        }
+        # Always add manual option at the end
+        board_options["_manual_"] = "Enter IP address manually..."
+
+        # Determine description based on discovery results
+        if self.discovered_boards:
+            description = f"Found {len(self.discovered_boards)} board(s) on your network. Select one to add, or enter an IP manually."
+        else:
+            description = "No boards found on the network. Enter an IP address manually."
 
         return self.async_show_form(
-            step_id="discover",
+            step_id="user",
             data_schema=vol.Schema(
                 {
                     vol.Required("board"): vol.In(board_options),
                 }
             ),
-            description_placeholders={"boards_found": str(len(self.discovered_boards))},
+            description_placeholders={"description": description},
             errors=errors,
         )
 
@@ -102,7 +165,7 @@ class VdaIrControlConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 # Try to connect to the board
                 board_info = await self._check_board(ip_address)
                 if board_info:
-                    self.selected_board = board_info
+                    self.context["board_info"] = board_info
                     return await self.async_step_adopt()
                 errors["base"] = "cannot_connect"
             else:
@@ -124,17 +187,20 @@ class VdaIrControlConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Handle board adoption/configuration step."""
         errors = {}
 
-        if self.selected_board is None:
+        # Get board info from context
+        board_info = self.context.get("board_info")
+        if not board_info:
             return self.async_abort(reason="no_board_selected")
 
-        mac_address = self.selected_board.get("mac_address", "")
-        ip_address = self.selected_board.get("ip_address", "")
-        current_name = self.selected_board.get("board_name", "IR Board")
-        current_id = self.selected_board.get("board_id", "")
+        mac_address = board_info.get("mac_address", "")
+        ip_address = board_info.get("ip_address", "")
+        current_name = board_info.get("board_name", "IR Board")
+        current_id = board_info.get("board_id", "")
 
-        # Check if already configured
-        await self.async_set_unique_id(mac_address)
-        self._abort_if_unique_id_configured()
+        # Check if already configured (only set unique_id if not already set by zeroconf)
+        if not self.unique_id:
+            await self.async_set_unique_id(mac_address)
+            self._abort_if_unique_id_configured()
 
         if user_input is not None:
             board_id = user_input.get("board_id", "").strip()
@@ -156,7 +222,7 @@ class VdaIrControlConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             "ip_address": ip_address,
                             "mac_address": mac_address,
                             "port": 80,
-                            "output_count": self.selected_board.get("output_count", 5),
+                            "output_count": board_info.get("output_count", 5),
                         },
                     )
                 errors["base"] = "adoption_failed"

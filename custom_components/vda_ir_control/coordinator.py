@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import socket
 from typing import Any, Dict, Optional
 
 from homeassistant.core import HomeAssistant
@@ -74,8 +75,16 @@ class VDAIRBoardCoordinator(DataUpdateCoordinator):
                 "unique_id": f"{self.board_id}_output_{i}",
             }
 
-    async def send_ir_code(self, output: int, code: str, protocol: str = None) -> bool:
-        """Send IR code to a specific output."""
+    async def send_ir_code(self, output: int, code: str, protocol: str = None, raw_data: list = None, frequency: int = None) -> bool:
+        """Send IR code to a specific output.
+
+        Args:
+            output: GPIO pin number
+            code: Hex code string (for protocol-based sending)
+            protocol: IR protocol (nec, samsung, sony, pioneer, raw, etc.)
+            raw_data: List of timing values in microseconds (for raw protocol)
+            frequency: Carrier frequency in Hz (default 38000)
+        """
         try:
             if self.session is None:
                 self.session = async_get_clientsession(self.hass)
@@ -86,6 +95,10 @@ class VDAIRBoardCoordinator(DataUpdateCoordinator):
             }
             if protocol:
                 payload["protocol"] = protocol.lower()
+            if raw_data:
+                payload["raw_data"] = raw_data
+            if frequency:
+                payload["frequency"] = frequency
 
             async with self.session.post(
                 f"{self.base_url}/send_ir",
@@ -169,12 +182,37 @@ class VDAIRDiscoveryCoordinator:
         self.session = None
         self.discovered_boards: Dict[str, Dict[str, Any]] = {}
 
-    async def discover_boards(self, subnet: str = "192.168.4") -> Dict[str, Dict[str, Any]]:
-        """Discover boards by scanning subnet."""
+    def _get_local_subnet(self) -> str:
+        """Get the local subnet that Home Assistant is running on."""
+        try:
+            # Create a socket to determine the local IP address
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            local_ip = s.getsockname()[0]
+            s.close()
+
+            # Extract subnet (first 3 octets)
+            parts = local_ip.split(".")
+            subnet = ".".join(parts[:3])
+            _LOGGER.info("Auto-detected local subnet: %s", subnet)
+            return subnet
+        except Exception as err:
+            _LOGGER.warning("Could not auto-detect subnet, using default: %s", err)
+            return "192.168.1"
+
+    async def discover_boards(self, subnet: str = None) -> Dict[str, Dict[str, Any]]:
+        """Discover boards by scanning subnet. If subnet is None, auto-detects local subnet."""
+        _LOGGER.info("Starting board discovery, subnet parameter: %s", subnet)
         boards = {}
 
         if self.session is None:
             self.session = async_get_clientsession(self.hass)
+
+        # Auto-detect subnet if not provided
+        if subnet is None:
+            subnet = self._get_local_subnet()
+
+        _LOGGER.info("Scanning subnet: %s (will scan %s.1 through %s.254)", subnet, subnet, subnet)
 
         # Scan common IP addresses in the subnet
         tasks = []
@@ -184,21 +222,24 @@ class VDAIRDiscoveryCoordinator:
         for ip in test_ips:
             tasks.append(self._check_board(ip))
 
-        # Scan a limited range for faster discovery
-        for i in range(1, 30):
+        # Scan a broader range to find all boards on the network
+        for i in range(1, 255):
             ip = f"{subnet}.{i}"
             if ip not in test_ips:  # Don't duplicate
                 tasks.append(self._check_board(ip))
 
+        _LOGGER.info("Created %d scan tasks, starting concurrent scan...", len(tasks))
         results = await asyncio.gather(*tasks, return_exceptions=True)
+        _LOGGER.info("Scan completed, processing %d results...", len(results))
 
         for result in results:
             if isinstance(result, dict) and "mac_address" in result:
                 mac = result["mac_address"]
                 boards[mac] = result
+                _LOGGER.info("Found board: %s at %s", result.get("board_id"), result.get("ip_address"))
 
         self.discovered_boards = boards
-        _LOGGER.info("Discovered %d IR boards on network", len(boards))
+        _LOGGER.info("Discovery complete: found %d IR boards on network", len(boards))
         return boards
 
     async def _check_board(self, ip_address: str) -> Optional[Dict[str, Any]]:
@@ -216,8 +257,10 @@ class VDAIRDiscoveryCoordinator:
                     # Verify it's an IR controller board
                     if "board_id" in data and "mac_address" in data:
                         data["ip_address"] = ip_address
-                        _LOGGER.debug(f"Found IR board at {ip_address}: {data.get('board_id')}")
+                        _LOGGER.info(f"Found IR board at {ip_address}: {data.get('board_id')}")
                         return data
+                    else:
+                        _LOGGER.debug(f"Device at {ip_address} responded but missing board_id or mac_address")
         except asyncio.TimeoutError:
             _LOGGER.debug(f"Timeout checking {ip_address}")
         except Exception as err:

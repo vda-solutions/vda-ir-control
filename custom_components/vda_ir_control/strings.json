@@ -2,17 +2,10 @@
   "config": {
     "step": {
       "user": {
-        "title": "VDA IR Control Setup",
-        "description": "Choose how you want to add an IR controller board.",
+        "title": "Add IR Controller Board",
+        "description": "{description}",
         "data": {
-          "setup_method": "Setup Method"
-        }
-      },
-      "discover": {
-        "title": "Select Board",
-        "description": "Found {boards_found} IR controller board(s). Select the one you want to add.",
-        "data": {
-          "board": "Board"
+          "board": "Select Board"
         }
       },
       "manual": {
@@ -29,6 +22,10 @@
           "board_id": "Board ID",
           "board_name": "Board Name"
         }
+      },
+      "zeroconf_confirm": {
+        "title": "Discovered IR Controller Board",
+        "description": "Found IR controller board on your network:\n\n**{name}**\nIP: {ip}\nMAC: {mac}\n\nDo you want to add this board?"
       }
     },
     "error": {
@@ -45,7 +42,8 @@
       "no_boards_found": "No IR controller boards found on the network",
       "no_board_selected": "No board was selected",
       "adoption_failed": "Failed to adopt board",
-      "already_configured": "This board is already configured"
+      "already_configured": "This board is already configured",
+      "not_vda_ir_board": "Discovered device is not a VDA IR controller board"
     }
   },
   "options": {

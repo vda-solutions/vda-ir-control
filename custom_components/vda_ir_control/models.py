@@ -267,38 +267,6 @@ class SerialConfig:
 
 
 @dataclass
-class NetworkConfig:
-    """Configuration for network communication."""
-    host: str = ""
-    port: int = 8000              # Default TCP port (your HDMI matrix uses 8000)
-    protocol: str = "tcp"         # tcp or udp
-    timeout: float = 5.0
-    persistent_connection: bool = True  # Keep TCP connection open
-    reconnect_interval: float = 30.0    # Seconds between reconnect attempts
-
-    def to_dict(self) -> dict:
-        return {
-            "host": self.host,
-            "port": self.port,
-            "protocol": self.protocol,
-            "timeout": self.timeout,
-            "persistent_connection": self.persistent_connection,
-            "reconnect_interval": self.reconnect_interval,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "NetworkConfig":
-        return cls(
-            host=data.get("host", ""),
-            port=data.get("port", 8000),
-            protocol=data.get("protocol", "tcp"),
-            timeout=data.get("timeout", 5.0),
-            persistent_connection=data.get("persistent_connection", True),
-            reconnect_interval=data.get("reconnect_interval", 30.0),
-        )
-
-
-@dataclass
 class ResponsePattern:
     """Pattern to parse device responses for state updates."""
     pattern: str = ""             # Regex pattern to match (e.g., "input (\\d+) -> output (\\d+)")
@@ -469,87 +437,6 @@ class MatrixOutput:
             index=data.get("index", 1),
             name=data.get("name", ""),
             device_id=data.get("device_id"),
-        )
-
-
-@dataclass
-class NetworkDevice:
-    """A network-controlled device (TCP/UDP)."""
-    device_id: str
-    name: str
-    device_type: DeviceType = DeviceType.CUSTOM
-    transport_type: TransportType = TransportType.NETWORK_TCP
-    location: str = ""
-    network_config: NetworkConfig = field(default_factory=NetworkConfig)
-    commands: Dict[str, DeviceCommand] = field(default_factory=dict)
-    # Global response patterns (apply to all responses)
-    global_response_patterns: List[ResponsePattern] = field(default_factory=list)
-    # Matrix I/O configuration (for hdmi_matrix type)
-    matrix_inputs: List[MatrixInput] = field(default_factory=list)
-    matrix_outputs: List[MatrixOutput] = field(default_factory=list)
-
-    def add_command(self, command: DeviceCommand) -> None:
-        """Add a command to this device."""
-        self.commands[command.command_id] = command
-
-    def get_command(self, command_id: str) -> Optional[DeviceCommand]:
-        """Get a command by ID."""
-        return self.commands.get(command_id)
-
-    def get_input_options(self) -> List[DeviceCommand]:
-        """Get commands that are input options (for select entity)."""
-        return [cmd for cmd in self.commands.values() if cmd.is_input_option]
-
-    def get_query_commands(self) -> List[DeviceCommand]:
-        """Get commands that are status queries."""
-        return [cmd for cmd in self.commands.values() if cmd.is_query]
-
-    def to_dict(self) -> dict:
-        return {
-            "device_id": self.device_id,
-            "name": self.name,
-            "device_type": self.device_type.value,
-            "transport_type": self.transport_type.value,
-            "location": self.location,
-            "network_config": self.network_config.to_dict(),
-            "commands": {k: v.to_dict() for k, v in self.commands.items()},
-            "global_response_patterns": [p.to_dict() for p in self.global_response_patterns],
-            "matrix_inputs": [i.to_dict() for i in self.matrix_inputs],
-            "matrix_outputs": [o.to_dict() for o in self.matrix_outputs],
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "NetworkDevice":
-        commands = {}
-        for k, v in data.get("commands", {}).items():
-            commands[k] = DeviceCommand.from_dict(v)
-
-        patterns = [
-            ResponsePattern.from_dict(p)
-            for p in data.get("global_response_patterns", [])
-        ]
-
-        matrix_inputs = [
-            MatrixInput.from_dict(i)
-            for i in data.get("matrix_inputs", [])
-        ]
-
-        matrix_outputs = [
-            MatrixOutput.from_dict(o)
-            for o in data.get("matrix_outputs", [])
-        ]
-
-        return cls(
-            device_id=data["device_id"],
-            name=data["name"],
-            device_type=DeviceType(data.get("device_type", "custom")),
-            transport_type=TransportType(data.get("transport_type", "network_tcp")),
-            location=data.get("location", ""),
-            network_config=NetworkConfig.from_dict(data.get("network_config", {})),
-            commands=commands,
-            global_response_patterns=patterns,
-            matrix_inputs=matrix_inputs,
-            matrix_outputs=matrix_outputs,
         )
 
 

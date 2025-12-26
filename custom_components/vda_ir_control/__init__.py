@@ -13,9 +13,7 @@ from .coordinator import VDAIRBoardCoordinator
 from .services import async_setup_services
 from .api import async_setup_api
 from .storage import get_storage
-from .network_coordinator import async_setup_network_coordinator
 from .profile_manager import get_profile_manager
-from .driver_manager import get_driver_manager
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
@@ -29,17 +27,9 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     # Initialize profile manager and load cached community profiles
     profile_manager = get_profile_manager(hass)
     await profile_manager.async_load()
-    _LOGGER.info(
+    _LOGGER.debug(
         "Profile manager initialized: %d community profiles cached",
         len(profile_manager.get_all_community_profiles())
-    )
-
-    # Initialize driver manager and load cached community drivers
-    driver_manager = get_driver_manager(hass)
-    await driver_manager.async_load()
-    _LOGGER.info(
-        "Driver manager initialized: %d community drivers cached",
-        len(driver_manager.get_all_community_drivers())
     )
 
     # Register services
@@ -48,33 +38,11 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     # Register REST API
     await async_setup_api(hass)
 
-    # Initialize network device coordinators
-    await _async_setup_network_devices(hass)
-
     return True
-
-
-async def _async_setup_network_devices(hass: HomeAssistant) -> None:
-    """Set up coordinators for all saved network devices."""
-    storage = get_storage(hass)
-    network_devices = await storage.async_get_all_network_devices()
-
-    for device in network_devices:
-        try:
-            await async_setup_network_coordinator(hass, device)
-            _LOGGER.info("Set up network device coordinator: %s", device.name)
-        except Exception as err:
-            _LOGGER.warning(
-                "Failed to connect to network device %s: %s",
-                device.name,
-                err,
-            )
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up VDA IR Control from a config entry."""
-    _LOGGER.debug("Setting up VDA IR Control entry: %s", entry.title)
-
     hass.data.setdefault(DOMAIN, {})
 
     # Create board coordinator
@@ -100,7 +68,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
-    # Forward setup to switch platform
+    # Forward setup to platforms
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     # Listen for config entry updates

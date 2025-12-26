@@ -73,17 +73,14 @@ class ProfileManager:
             self._meta.get("last_sync", "never")
         )
 
-    async def async_sync_community_profiles(self) -> Dict[str, Any]:
-        """Sync profiles from GitHub.
+    async def async_fetch_manifest(self) -> Dict[str, Any]:
+        """Fetch the manifest (list of available profiles) from GitHub.
 
-        Fetches the manifest from the community repository, then downloads
-        each profile listed. Uses ETag for conditional requests to respect
-        GitHub API rate limits.
+        Only downloads the manifest, not the actual profiles.
 
         Returns:
-            Dict with sync results including success status, counts, and messages
+            Dict with manifest data including available profiles list
         """
-        await self.async_load()
         session = async_get_clientsession(self.hass)
 
         headers = {
@@ -91,39 +88,17 @@ class ProfileManager:
             "User-Agent": "VDA-IR-Control-HomeAssistant/1.0"
         }
 
-        # Use ETag for conditional request if available
-        if self._meta.get("etag"):
-            headers["If-None-Match"] = self._meta["etag"]
-
         result = {
             "success": False,
-            "profiles_added": 0,
-            "profiles_updated": 0,
-            "profiles_failed": 0,
-            "total_profiles": 0,
+            "available_profiles": [],
             "message": "",
-            "last_sync": None,
         }
 
         try:
-            # Fetch manifest from GitHub
             manifest_url = f"{GITHUB_RAW_BASE}/manifest.json"
             _LOGGER.debug("Fetching manifest from %s", manifest_url)
 
-            async with session.get(
-                manifest_url,
-                headers=headers,
-                timeout=30
-            ) as resp:
-                if resp.status == 304:
-                    # Not modified
-                    result["success"] = True
-                    result["message"] = "Profiles are up to date"
-                    result["total_profiles"] = len(self._community_profiles)
-                    result["last_sync"] = self._meta.get("last_sync")
-                    _LOGGER.info("Community profiles are up to date (304 Not Modified)")
-                    return result
-
+            async with session.get(manifest_url, headers=headers, timeout=30) as resp:
                 if resp.status == 404:
                     result["message"] = "Community profile repository not found"
                     _LOGGER.error("Manifest not found at %s", manifest_url)
@@ -135,80 +110,176 @@ class ProfileManager:
                     return result
 
                 manifest = await resp.json(content_type=None)
-                new_etag = resp.headers.get("ETag")
 
-            # Validate manifest
-            profiles_to_fetch = manifest.get("profiles", [])
-            if not profiles_to_fetch:
-                result["message"] = "Manifest contains no profiles"
-                _LOGGER.warning("Manifest is empty")
-                return result
+            # Parse manifest and extract profile metadata
+            # The manifest can have two formats:
+            # 1. Simple: {"profiles": ["path/to/profile.json", ...]}
+            # 2. Detailed: {"profiles": [{"id": "...", "name": "...", "path": "...", ...}, ...]}
+            profiles_raw = manifest.get("profiles", [])
+            available_profiles = []
 
-            _LOGGER.info("Found %d profiles in manifest", len(profiles_to_fetch))
+            _LOGGER.info("Fetching command counts for %d profiles", len(profiles_raw))
 
-            # Fetch each profile listed in manifest
-            added = 0
-            updated = 0
-            failed = 0
+            for item in profiles_raw:
+                if isinstance(item, str):
+                    # Simple format - just a path
+                    # Extract metadata from path: "tv/samsung/samsung_tv.json"
+                    parts = item.split("/")
+                    profile_id = parts[-1].replace(".json", "")
 
-            for profile_path in profiles_to_fetch:
-                try:
-                    profile_url = f"{GITHUB_RAW_BASE}/{profile_path}"
-                    async with session.get(profile_url, timeout=10) as profile_resp:
-                        if profile_resp.status == 200:
-                            profile_data = await profile_resp.json(content_type=None)
-                            profile_id = profile_data.get("profile_id")
+                    # Extract device type and manufacturer
+                    device_type = parts[0] if len(parts) > 0 else "unknown"
+                    manufacturer = parts[1] if len(parts) > 1 else "Unknown"
 
-                            if profile_id:
-                                if profile_id in self._community_profiles:
-                                    updated += 1
-                                else:
-                                    added += 1
-                                self._community_profiles[profile_id] = profile_data
-                                _LOGGER.debug("Fetched profile: %s", profile_id)
-                            else:
-                                _LOGGER.warning("Profile missing profile_id: %s", profile_path)
-                                failed += 1
-                        else:
-                            _LOGGER.warning(
-                                "Failed to fetch profile %s: HTTP %d",
-                                profile_path, profile_resp.status
-                            )
-                            failed += 1
-                except Exception as err:
-                    _LOGGER.warning("Error fetching profile %s: %s", profile_path, err)
-                    failed += 1
+                    # Fetch actual command count from the profile file
+                    command_count = None
+                    try:
+                        profile_url = f"{GITHUB_RAW_BASE}/{item}"
+                        async with session.get(profile_url, timeout=5) as profile_resp:
+                            if profile_resp.status == 200:
+                                profile_data = await profile_resp.json(content_type=None)
+                                codes = profile_data.get("codes", {})
+                                command_count = len(codes)
+                                _LOGGER.debug("Profile %s has %d commands", profile_id, command_count)
+                    except Exception as err:
+                        _LOGGER.warning("Failed to fetch command count for %s: %s", profile_id, err)
 
-            # Save to storage
-            await self._community_store.async_save(self._community_profiles)
-
-            # Update metadata
-            self._meta = {
-                "etag": new_etag,
-                "last_sync": datetime.now().isoformat(),
-                "manifest_version": manifest.get("version", "unknown"),
-                "manifest_updated": manifest.get("updated", "unknown"),
-            }
-            await self._meta_store.async_save(self._meta)
+                    available_profiles.append({
+                        "profile_id": profile_id,
+                        "path": item,
+                        "name": profile_id.replace("_", " ").title(),
+                        "manufacturer": manufacturer.replace("_", " ").title(),
+                        "device_type": device_type,
+                        "downloaded": False,
+                        "command_count": command_count,
+                    })
+                elif isinstance(item, dict):
+                    # Detailed format - has metadata
+                    if "downloaded" not in item:
+                        item["downloaded"] = False
+                    available_profiles.append(item)
 
             result["success"] = True
-            result["profiles_added"] = added
-            result["profiles_updated"] = updated
-            result["profiles_failed"] = failed
-            result["total_profiles"] = len(self._community_profiles)
-            result["last_sync"] = self._meta["last_sync"]
-            result["message"] = f"Synced {added} new, {updated} updated profiles"
-            if failed > 0:
-                result["message"] += f" ({failed} failed)"
+            result["available_profiles"] = available_profiles
+            result["manifest_version"] = manifest.get("version", "unknown")
+            result["manifest_updated"] = manifest.get("updated", "unknown")
+            result["message"] = f"Found {len(available_profiles)} available profiles"
 
-            _LOGGER.info(
-                "Community profile sync complete: %d added, %d updated, %d failed",
-                added, updated, failed
-            )
+            # Update metadata
+            self._meta["manifest_last_fetch"] = datetime.now().isoformat()
+            self._meta["manifest_version"] = manifest.get("version", "unknown")
+            await self._meta_store.async_save(self._meta)
+
+            _LOGGER.info("Fetched manifest with %d profiles", len(available_profiles))
 
         except Exception as err:
-            _LOGGER.error("Failed to sync community profiles: %s", err)
-            result["message"] = f"Sync failed: {str(err)}"
+            _LOGGER.error("Failed to fetch manifest: %s", err)
+            result["message"] = f"Fetch failed: {str(err)}"
+
+        return result
+
+    async def async_download_profile(self, profile_id: str) -> Dict[str, Any]:
+        """Download a specific profile from GitHub.
+
+        Args:
+            profile_id: The profile ID to download
+
+        Returns:
+            Dict with success status and profile data
+        """
+        await self.async_load()
+        session = async_get_clientsession(self.hass)
+
+        result = {
+            "success": False,
+            "message": "",
+            "profile": None,
+        }
+
+        try:
+            # First fetch manifest to find the profile path
+            manifest_url = f"{GITHUB_RAW_BASE}/manifest.json"
+            async with session.get(manifest_url, timeout=30) as resp:
+                if resp.status != 200:
+                    result["message"] = f"Failed to fetch manifest: HTTP {resp.status}"
+                    return result
+                manifest = await resp.json(content_type=None)
+
+            # Find the profile path in manifest
+            profile_path = None
+            profiles_raw = manifest.get("profiles", [])
+
+            for item in profiles_raw:
+                if isinstance(item, str):
+                    # Simple format - just a path
+                    # Extract profile_id from path and compare exactly
+                    item_profile_id = item.split("/")[-1].replace(".json", "")
+                    if item_profile_id == profile_id:
+                        profile_path = item
+                        break
+                elif isinstance(item, dict):
+                    # Detailed format - check id field
+                    if item.get("profile_id") == profile_id or item.get("id") == profile_id:
+                        profile_path = item.get("path")
+                        break
+
+            if not profile_path:
+                result["message"] = f"Profile {profile_id} not found in manifest"
+                return result
+
+            # Download the profile
+            profile_url = f"{GITHUB_RAW_BASE}/{profile_path}"
+            _LOGGER.debug("Downloading profile from %s", profile_url)
+
+            async with session.get(profile_url, timeout=10) as profile_resp:
+                if profile_resp.status != 200:
+                    result["message"] = f"Failed to download profile: HTTP {profile_resp.status}"
+                    return result
+
+                profile_data = await profile_resp.json(content_type=None)
+
+            # Save to storage
+            self._community_profiles[profile_id] = profile_data
+            await self._community_store.async_save(self._community_profiles)
+
+            result["success"] = True
+            result["profile"] = profile_data
+            result["message"] = f"Downloaded profile {profile_id}"
+
+            _LOGGER.info("Downloaded community profile: %s", profile_id)
+
+        except Exception as err:
+            _LOGGER.error("Failed to download profile %s: %s", profile_id, err)
+            result["message"] = f"Download failed: {str(err)}"
+
+        return result
+
+    async def async_delete_profile(self, profile_id: str) -> Dict[str, Any]:
+        """Delete a downloaded community profile.
+
+        Args:
+            profile_id: The profile ID to delete
+
+        Returns:
+            Dict with success status and message
+        """
+        await self.async_load()
+
+        result = {
+            "success": False,
+            "message": "",
+        }
+
+        if profile_id not in self._community_profiles:
+            result["message"] = f"Profile {profile_id} not found in downloaded profiles"
+            return result
+
+        del self._community_profiles[profile_id]
+        await self._community_store.async_save(self._community_profiles)
+
+        result["success"] = True
+        result["message"] = f"Deleted profile {profile_id}"
+        _LOGGER.info("Deleted community profile: %s", profile_id)
 
         return result
 
@@ -296,7 +367,7 @@ class ProfileManager:
             Dict with sync status including last sync time, profile counts, etc.
         """
         return {
-            "last_sync": self._meta.get("last_sync"),
+            "last_sync": self._meta.get("manifest_last_fetch"),
             "manifest_version": self._meta.get("manifest_version"),
             "manifest_updated": self._meta.get("manifest_updated"),
             "community_profile_count": len(self._community_profiles),

@@ -90,6 +90,33 @@ type: custom:vda-ir-remote-card
 
 See [vda-ir-firmware](https://github.com/vda-solutions/vda-ir-firmware) for hardware setup and wiring guides.
 
+## IR Driver Module
+
+<p align="center">
+  <img src="images/ir-driver-module-top.png" alt="IR Driver Module v1.1 - Top View" width="600">
+</p>
+
+<p align="center">
+  <img src="images/ir-driver-module-back.png" alt="IR Driver Module v1.1 - Back View" width="600">
+</p>
+
+**8-Channel IR Driver Module v1.1** - A professional IR driver board designed to work with ESP32 microcontrollers.
+
+**Features:**
+- 8 independent IR output channels (CN1-CN8)
+- Current limiting resistors for LED protection
+- Transistor drivers for high-power IR LED output
+- Reverse polarity protection diode
+- Power filtering capacitors for clean signal output
+
+**Compatibility:**
+- Works with any microcontroller with 3.3V or 5V GPIO
+- Designed specifically for ESP32 DevKit and Olimex ESP32-POE-ISO boards
+- Pre-built firmware available in [vda-ir-firmware](https://github.com/vda-solutions/vda-ir-firmware)
+
+**Purchase:**
+IR Driver Module boards are available for **$59.99** (plus shipping and tax) at [vdasolutionsny.com](https://vdasolutionsny.com)
+
 ## Built-in IR Profiles
 
 The integration includes pre-loaded profiles for popular devices:

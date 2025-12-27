@@ -115,7 +115,7 @@ See [vda-ir-firmware](https://github.com/vda-solutions/vda-ir-firmware) for hard
 - Pre-built firmware available in [vda-ir-firmware](https://github.com/vda-solutions/vda-ir-firmware)
 
 **Purchase:**
-IR Driver Module boards are available for **$59.99** (plus shipping and tax) at [vdasolutionsny.com](https://vdasolutionsny.com)
+IR Driver Module boards will soon be available at [vdasolutionsny.com](https://vdasolutionsny.com)
 
 ## Built-in IR Profiles
 

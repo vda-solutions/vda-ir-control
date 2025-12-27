@@ -5,10 +5,10 @@
   "config_flow": true,
   "dependencies": ["http"],
   "documentation": "https://github.com/vda-solutions/vda-ir-control",
+  "integration_type": "device",
   "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/vda-solutions/vda-ir-control/issues",
   "requirements": [],
   "version": "1.6.0",
-  "issue_tracker": "https://github.com/vda-solutions/vda-ir-control/issues",
-  "zeroconf": ["_http._tcp.local."],
-  "integration_type": "device"
+  "zeroconf": ["_http._tcp.local."]
 }

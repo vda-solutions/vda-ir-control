@@ -9,6 +9,6 @@
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/vda-solutions/vda-ir-control/issues",
   "requirements": [],
-  "version": "1.6.1",
+  "version": "1.6.2",
   "zeroconf": ["_http._tcp.local."]
 }

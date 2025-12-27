@@ -106,7 +106,8 @@ CREATE_DEVICE_SCHEMA = vol.Schema({
     # Matrix linking (optional)
     vol.Optional("matrix_device_id"): vol.Any(str, None),
     vol.Optional("matrix_device_type"): vol.Any(vol.In(["network", "serial"]), None),
-    vol.Optional("matrix_output"): vol.Any(str, None),
+    vol.Optional("matrix_port_type"): vol.Any(vol.In(["input", "output"]), None),
+    vol.Optional("matrix_port"): vol.Any(str, None),
 })
 
 DELETE_DEVICE_SCHEMA = vol.Schema({
@@ -122,7 +123,8 @@ UPDATE_DEVICE_SCHEMA = vol.Schema({
     vol.Optional("output_port"): GPIO_PORT_RANGE,
     vol.Optional("matrix_device_id"): vol.Any(str, None),
     vol.Optional("matrix_device_type"): vol.Any(vol.In(["network", "serial"]), None),
-    vol.Optional("matrix_output"): vol.Any(str, None),
+    vol.Optional("matrix_port_type"): vol.Any(vol.In(["input", "output"]), None),
+    vol.Optional("matrix_port"): vol.Any(str, None),
 })
 
 LIST_DEVICES_SCHEMA = vol.Schema({})
@@ -547,7 +549,8 @@ async def async_setup_services(hass: HomeAssistant) -> None:
             output_port=call.data["output_port"],
             matrix_device_id=call.data.get("matrix_device_id"),
             matrix_device_type=call.data.get("matrix_device_type"),
-            matrix_output=call.data.get("matrix_output"),
+            matrix_port_type=call.data.get("matrix_port_type"),
+            matrix_port=call.data.get("matrix_port"),
         )
 
         await storage.async_save_device(device)
@@ -644,8 +647,10 @@ async def async_setup_services(hass: HomeAssistant) -> None:
             device.matrix_device_id = call.data["matrix_device_id"]
         if "matrix_device_type" in call.data:
             device.matrix_device_type = call.data["matrix_device_type"]
-        if "matrix_output" in call.data:
-            device.matrix_output = call.data["matrix_output"]
+        if "matrix_port_type" in call.data:
+            device.matrix_port_type = call.data["matrix_port_type"]
+        if "matrix_port" in call.data:
+            device.matrix_port = call.data["matrix_port"]
 
         await storage.async_save_device(device)
         _LOGGER.info("Updated device: %s", device_id)

@@ -183,10 +183,11 @@ class ControlledDevice:
     device_profile_id: str = ""  # Links to DeviceProfile
     board_id: str = ""  # Which board controls this device
     output_port: int = 0  # Which port on the board
-    # Matrix linking (optional) - links this device to an HDMI matrix output
+    # Matrix linking (optional) - links this device to an HDMI matrix port
     matrix_device_id: Optional[str] = None  # Network/Serial device ID of the matrix
     matrix_device_type: Optional[str] = None  # "network" or "serial"
-    matrix_output: Optional[str] = None  # Which output on the matrix this device is connected to
+    matrix_port_type: Optional[str] = None  # "input" (source devices) or "output" (displays)
+    matrix_port: Optional[str] = None  # Which port on the matrix this device is connected to
 
     def to_dict(self) -> dict:
         return {
@@ -198,11 +199,19 @@ class ControlledDevice:
             "output_port": self.output_port,
             "matrix_device_id": self.matrix_device_id,
             "matrix_device_type": self.matrix_device_type,
-            "matrix_output": self.matrix_output,
+            "matrix_port_type": self.matrix_port_type,
+            "matrix_port": self.matrix_port,
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> "ControlledDevice":
+        # Handle backward compatibility: matrix_output -> matrix_port
+        matrix_port = data.get("matrix_port") or data.get("matrix_output")
+        matrix_port_type = data.get("matrix_port_type")
+        # If old data had matrix_output, assume it was an output device
+        if not matrix_port_type and data.get("matrix_output"):
+            matrix_port_type = "output"
+
         return cls(
             device_id=data["device_id"],
             name=data["name"],
@@ -212,7 +221,8 @@ class ControlledDevice:
             output_port=data.get("output_port", 0),
             matrix_device_id=data.get("matrix_device_id"),
             matrix_device_type=data.get("matrix_device_type"),
-            matrix_output=data.get("matrix_output"),
+            matrix_port_type=matrix_port_type,
+            matrix_port=matrix_port,
         )
 
 

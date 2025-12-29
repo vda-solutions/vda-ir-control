@@ -28,7 +28,17 @@ from .ir_profiles import (
     get_available_device_types,
 )
 from .profile_manager import get_profile_manager
-from .models import SerialDevice, SerialConfig, DeviceCommand, ResponsePattern, DeviceGroup, DeviceGroupMember
+from .models import (
+    SerialDevice,
+    SerialConfig,
+    DeviceCommand,
+    ResponsePattern,
+    DeviceGroup,
+    DeviceGroupMember,
+    HARemoteDevice,
+    HADeviceFamily,
+    HA_DEVICE_COMMANDS,
+)
 from .serial_coordinator import (
     get_serial_coordinator,
     async_setup_serial_coordinator,
@@ -1548,6 +1558,248 @@ class VDAIRDeviceGroupView(HomeAssistantView):
         return self.json({"success": True})
 
 
+# ============================================================================
+# HA REMOTE DEVICE ENDPOINTS (Apple TV, Roku, Android TV, etc.)
+# ============================================================================
+
+
+class VDAIRHADevicesView(HomeAssistantView):
+    """View for HA remote devices collection."""
+
+    url = "/api/vda_ir_control/ha_devices"
+    name = "api:vda_ir_control:ha_devices"
+    requires_auth = True
+
+    async def get(self, request):
+        """Get all HA devices."""
+        hass = request.app["hass"]
+        storage = get_storage(hass)
+        devices = await storage.async_get_all_ha_devices()
+        return self.json([d.to_dict() for d in devices])
+
+    async def post(self, request):
+        """Create a new HA device."""
+        hass = request.app["hass"]
+        storage = get_storage(hass)
+
+        try:
+            data = await request.json()
+        except Exception:
+            return self.json({"error": "Invalid JSON"}, status_code=400)
+
+        device_id = data.get("device_id")
+        name = data.get("name")
+        entity_id = data.get("entity_id")
+        device_family = data.get("device_family", "custom")
+
+        if not device_id or not name or not entity_id:
+            return self.json(
+                {"error": "device_id, name, and entity_id are required"},
+                status_code=400
+            )
+
+        # Check if device already exists
+        existing = await storage.async_get_ha_device(device_id)
+        if existing:
+            return self.json({"error": "Device ID already exists"}, status_code=400)
+
+        device = HARemoteDevice(
+            device_id=device_id,
+            name=name,
+            entity_id=entity_id,
+            device_family=HADeviceFamily(device_family),
+            location=data.get("location", ""),
+            matrix_device_id=data.get("matrix_device_id"),
+            matrix_device_type=data.get("matrix_device_type"),
+            matrix_port=data.get("matrix_port"),
+            custom_commands=data.get("custom_commands", []),
+        )
+
+        await storage.async_save_ha_device(device)
+        _LOGGER.info("Created HA device: %s (%s)", device_id, entity_id)
+
+        return self.json(device.to_dict())
+
+
+class VDAIRHADeviceView(HomeAssistantView):
+    """View for a single HA remote device."""
+
+    url = "/api/vda_ir_control/ha_devices/{device_id}"
+    name = "api:vda_ir_control:ha_device"
+    requires_auth = True
+
+    async def get(self, request, device_id):
+        """Get a single HA device."""
+        hass = request.app["hass"]
+        storage = get_storage(hass)
+        device = await storage.async_get_ha_device(device_id)
+
+        if not device:
+            return self.json({"error": "Device not found"}, status_code=404)
+
+        result = device.to_dict()
+        result["commands"] = device.get_commands()
+        return self.json(result)
+
+    async def put(self, request, device_id):
+        """Update an HA device."""
+        hass = request.app["hass"]
+        storage = get_storage(hass)
+
+        device = await storage.async_get_ha_device(device_id)
+        if not device:
+            return self.json({"error": "Device not found"}, status_code=404)
+
+        try:
+            data = await request.json()
+        except Exception:
+            return self.json({"error": "Invalid JSON"}, status_code=400)
+
+        # Update fields
+        device.name = data.get("name", device.name)
+        device.entity_id = data.get("entity_id", device.entity_id)
+        device.location = data.get("location", device.location)
+        device.matrix_device_id = data.get("matrix_device_id", device.matrix_device_id)
+        device.matrix_device_type = data.get("matrix_device_type", device.matrix_device_type)
+        device.matrix_port = data.get("matrix_port", device.matrix_port)
+
+        if "device_family" in data:
+            device.device_family = HADeviceFamily(data["device_family"])
+        if "custom_commands" in data:
+            device.custom_commands = data["custom_commands"]
+
+        await storage.async_save_ha_device(device)
+        _LOGGER.info("Updated HA device: %s", device_id)
+
+        return self.json(device.to_dict())
+
+    async def delete(self, request, device_id):
+        """Delete an HA device."""
+        hass = request.app["hass"]
+        storage = get_storage(hass)
+
+        device = await storage.async_get_ha_device(device_id)
+        if not device:
+            return self.json({"error": "Device not found"}, status_code=404)
+
+        await storage.async_delete_ha_device(device_id)
+        _LOGGER.info("Deleted HA device: %s", device_id)
+
+        return self.json({"success": True})
+
+
+class VDAIRHADeviceCommandsView(HomeAssistantView):
+    """View for HA device commands."""
+
+    url = "/api/vda_ir_control/ha_devices/{device_id}/commands"
+    name = "api:vda_ir_control:ha_device_commands"
+    requires_auth = True
+
+    async def get(self, request, device_id):
+        """Get commands for an HA device."""
+        hass = request.app["hass"]
+        storage = get_storage(hass)
+        device = await storage.async_get_ha_device(device_id)
+
+        if not device:
+            return self.json({"error": "Device not found"}, status_code=404)
+
+        return self.json({
+            "device_id": device_id,
+            "device_family": device.device_family.value,
+            "commands": device.get_commands(),
+        })
+
+
+class VDAIRHADeviceFamiliesView(HomeAssistantView):
+    """View for available HA device families."""
+
+    url = "/api/vda_ir_control/ha_device_families"
+    name = "api:vda_ir_control:ha_device_families"
+    requires_auth = True
+
+    async def get(self, request):
+        """Get available device families and their commands."""
+        families = []
+        for family in HADeviceFamily:
+            families.append({
+                "id": family.value,
+                "name": family.value.replace("_", " ").title(),
+                "commands": HA_DEVICE_COMMANDS.get(family, []),
+            })
+        return self.json(families)
+
+
+class VDAIRHAEntitiesView(HomeAssistantView):
+    """View for discovering available HA remote/media_player entities."""
+
+    url = "/api/vda_ir_control/ha_entities"
+    name = "api:vda_ir_control:ha_entities"
+    requires_auth = True
+
+    async def get(self, request):
+        """Get available remote and media_player entities."""
+        hass = request.app["hass"]
+        entities = []
+
+        # Find remote entities
+        for entity_id, state in hass.states.async_all():
+            if entity_id.startswith("remote."):
+                platform = None
+                entity_entry = hass.data.get("entity_registry", {}).get(entity_id)
+                if entity_entry:
+                    platform = entity_entry.platform
+
+                # Try to detect device family from platform
+                device_family = "custom"
+                if platform:
+                    if "apple_tv" in platform:
+                        device_family = "apple_tv"
+                    elif "roku" in platform:
+                        device_family = "roku"
+                    elif "androidtv" in platform:
+                        device_family = "android_tv"
+
+                entities.append({
+                    "entity_id": entity_id,
+                    "friendly_name": state.attributes.get("friendly_name", entity_id),
+                    "platform": platform,
+                    "device_family": device_family,
+                    "type": "remote",
+                })
+
+        # Find media_player entities that might be controllable
+        for entity_id, state in hass.states.async_all():
+            if entity_id.startswith("media_player."):
+                platform = None
+                entity_entry = hass.data.get("entity_registry", {}).get(entity_id)
+                if entity_entry:
+                    platform = entity_entry.platform
+
+                # Only include certain platforms
+                device_family = None
+                if platform:
+                    if "apple_tv" in platform:
+                        device_family = "apple_tv"
+                    elif "roku" in platform:
+                        device_family = "roku"
+                    elif "androidtv" in platform:
+                        device_family = "android_tv"
+                    elif "cast" in platform:
+                        device_family = "chromecast"
+
+                if device_family:
+                    entities.append({
+                        "entity_id": entity_id,
+                        "friendly_name": state.attributes.get("friendly_name", entity_id),
+                        "platform": platform,
+                        "device_family": device_family,
+                        "type": "media_player",
+                    })
+
+        return self.json(entities)
+
+
 async def async_setup_api(hass: HomeAssistant) -> None:
     """Set up the REST API."""
     # IR device endpoints
@@ -1587,5 +1839,12 @@ async def async_setup_api(hass: HomeAssistant) -> None:
     # Device group endpoints
     hass.http.register_view(VDAIRDeviceGroupsView())
     hass.http.register_view(VDAIRDeviceGroupView())
+
+    # HA remote device endpoints
+    hass.http.register_view(VDAIRHADevicesView())
+    hass.http.register_view(VDAIRHADeviceView())
+    hass.http.register_view(VDAIRHADeviceCommandsView())
+    hass.http.register_view(VDAIRHADeviceFamiliesView())
+    hass.http.register_view(VDAIRHAEntitiesView())
 
     _LOGGER.info("VDA IR Control REST API registered")

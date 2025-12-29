@@ -546,6 +546,106 @@ class SerialDevice:
         )
 
 
+# ============================================================================
+# HOME ASSISTANT REMOTE DEVICE SUPPORT (Apple TV, Roku, Android TV, etc.)
+# ============================================================================
+
+
+class HADeviceFamily(Enum):
+    """Supported Home Assistant device families."""
+    APPLE_TV = "apple_tv"
+    ROKU = "roku"
+    ANDROID_TV = "android_tv"
+    CHROMECAST = "chromecast"
+    NVIDIA_SHIELD = "nvidia_shield"
+    FIRE_TV = "fire_tv"
+    CUSTOM = "custom"
+
+
+# Predefined commands for each device family
+HA_DEVICE_COMMANDS = {
+    HADeviceFamily.APPLE_TV: [
+        "up", "down", "left", "right", "select", "menu", "home", "top_menu",
+        "play_pause", "pause", "play", "stop", "skip_forward", "skip_backward",
+        "volume_up", "volume_down", "power"
+    ],
+    HADeviceFamily.ROKU: [
+        "up", "down", "left", "right", "select", "back", "home", "play",
+        "pause", "forward", "reverse", "volume_up", "volume_down", "volume_mute",
+        "channel_up", "channel_down", "info", "replay", "search", "power"
+    ],
+    HADeviceFamily.ANDROID_TV: [
+        "UP", "DOWN", "LEFT", "RIGHT", "CENTER", "BACK", "HOME", "MENU",
+        "PLAY", "PAUSE", "STOP", "NEXT", "PREVIOUS", "VOLUME_UP", "VOLUME_DOWN",
+        "MUTE", "POWER"
+    ],
+    HADeviceFamily.FIRE_TV: [
+        "UP", "DOWN", "LEFT", "RIGHT", "CENTER", "BACK", "HOME", "MENU",
+        "PLAY", "PAUSE", "STOP", "NEXT", "PREVIOUS", "VOLUME_UP", "VOLUME_DOWN",
+        "MUTE", "POWER"
+    ],
+    HADeviceFamily.CHROMECAST: [
+        "up", "down", "left", "right", "select", "back", "home",
+        "play", "pause", "stop", "volume_up", "volume_down", "mute"
+    ],
+    HADeviceFamily.NVIDIA_SHIELD: [
+        "UP", "DOWN", "LEFT", "RIGHT", "CENTER", "BACK", "HOME", "MENU",
+        "PLAY", "PAUSE", "STOP", "NEXT", "PREVIOUS", "VOLUME_UP", "VOLUME_DOWN",
+        "MUTE", "POWER"
+    ],
+    HADeviceFamily.CUSTOM: [],
+}
+
+
+@dataclass
+class HARemoteDevice:
+    """A Home Assistant-controlled remote device (Apple TV, Roku, etc.)."""
+    device_id: str                  # Unique ID, e.g., "living_room_apple_tv"
+    name: str                       # Display name, e.g., "Living Room Apple TV"
+    entity_id: str                  # HA entity ID, e.g., "remote.apple_tv" or "media_player.roku_xxx"
+    device_family: HADeviceFamily = HADeviceFamily.CUSTOM
+    location: str = ""              # e.g., "Living Room", "Bedroom"
+    # Matrix linking (optional) - links this device to an HDMI matrix port
+    matrix_device_id: Optional[str] = None  # Network/Serial device ID of the matrix
+    matrix_device_type: Optional[str] = None  # "network" or "serial"
+    matrix_port: Optional[str] = None  # Which input port on the matrix this device is connected to
+    # Custom commands (if device_family is CUSTOM or to override defaults)
+    custom_commands: List[str] = field(default_factory=list)
+
+    def get_commands(self) -> List[str]:
+        """Get the list of available commands for this device."""
+        if self.custom_commands:
+            return self.custom_commands
+        return HA_DEVICE_COMMANDS.get(self.device_family, [])
+
+    def to_dict(self) -> dict:
+        return {
+            "device_id": self.device_id,
+            "name": self.name,
+            "entity_id": self.entity_id,
+            "device_family": self.device_family.value,
+            "location": self.location,
+            "matrix_device_id": self.matrix_device_id,
+            "matrix_device_type": self.matrix_device_type,
+            "matrix_port": self.matrix_port,
+            "custom_commands": self.custom_commands,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "HARemoteDevice":
+        return cls(
+            device_id=data["device_id"],
+            name=data["name"],
+            entity_id=data["entity_id"],
+            device_family=HADeviceFamily(data.get("device_family", "custom")),
+            location=data.get("location", ""),
+            matrix_device_id=data.get("matrix_device_id"),
+            matrix_device_type=data.get("matrix_device_type"),
+            matrix_port=data.get("matrix_port"),
+            custom_commands=data.get("custom_commands", []),
+        )
+
+
 @dataclass
 class DeviceGroupMember:
     """A member device in a group."""

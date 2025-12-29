@@ -13,6 +13,7 @@ from .models import (
     ControlledDevice,
     SerialDevice,
     DeviceGroup,
+    HARemoteDevice,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -23,6 +24,7 @@ STORAGE_KEY_PROFILES = f"{DOMAIN}_profiles"
 STORAGE_KEY_DEVICES = f"{DOMAIN}_devices"
 STORAGE_KEY_SERIAL_DEVICES = f"{DOMAIN}_serial_devices"
 STORAGE_KEY_DEVICE_GROUPS = f"{DOMAIN}_device_groups"
+STORAGE_KEY_HA_DEVICES = f"{DOMAIN}_ha_devices"
 
 
 class VDAIRStorage:
@@ -36,6 +38,7 @@ class VDAIRStorage:
         self._devices_store = Store(hass, STORAGE_VERSION, STORAGE_KEY_DEVICES)
         self._serial_devices_store = Store(hass, STORAGE_VERSION, STORAGE_KEY_SERIAL_DEVICES)
         self._device_groups_store = Store(hass, STORAGE_VERSION, STORAGE_KEY_DEVICE_GROUPS)
+        self._ha_devices_store = Store(hass, STORAGE_VERSION, STORAGE_KEY_HA_DEVICES)
 
         # In-memory cache
         self._boards: Dict[str, BoardConfig] = {}
@@ -43,6 +46,7 @@ class VDAIRStorage:
         self._devices: Dict[str, ControlledDevice] = {}
         self._serial_devices: Dict[str, SerialDevice] = {}
         self._device_groups: Dict[str, DeviceGroup] = {}
+        self._ha_devices: Dict[str, HARemoteDevice] = {}
         self._loaded = False
 
     async def async_load(self) -> None:
@@ -95,14 +99,24 @@ class VDAIRStorage:
                 except Exception as err:
                     _LOGGER.error("Failed to load device group %s: %s", group_id, err)
 
+        # Load HA remote devices
+        ha_devices_data = await self._ha_devices_store.async_load()
+        if ha_devices_data:
+            for device_id, device_dict in ha_devices_data.items():
+                try:
+                    self._ha_devices[device_id] = HARemoteDevice.from_dict(device_dict)
+                except Exception as err:
+                    _LOGGER.error("Failed to load HA device %s: %s", device_id, err)
+
         self._loaded = True
         _LOGGER.info(
-            "Loaded %d boards, %d profiles, %d IR devices, %d serial devices, %d device groups",
+            "Loaded %d boards, %d profiles, %d IR devices, %d serial devices, %d device groups, %d HA devices",
             len(self._boards),
             len(self._profiles),
             len(self._devices),
             len(self._serial_devices),
             len(self._device_groups),
+            len(self._ha_devices),
         )
 
     async def _async_save_boards(self) -> None:
@@ -344,6 +358,40 @@ class VDAIRStorage:
         if group_id in self._device_groups:
             del self._device_groups[group_id]
             await self._async_save_device_groups()
+
+    # HA Remote Device operations
+    async def _async_save_ha_devices(self) -> None:
+        """Save HA devices to storage."""
+        data = {k: v.to_dict() for k, v in self._ha_devices.items()}
+        await self._ha_devices_store.async_save(data)
+
+    async def async_get_ha_device(self, device_id: str) -> Optional[HARemoteDevice]:
+        """Get an HA device by ID."""
+        await self.async_load()
+        return self._ha_devices.get(device_id)
+
+    async def async_get_all_ha_devices(self) -> List[HARemoteDevice]:
+        """Get all HA devices."""
+        await self.async_load()
+        return list(self._ha_devices.values())
+
+    async def async_get_ha_devices_by_location(self, location: str) -> List[HARemoteDevice]:
+        """Get all HA devices in a specific location."""
+        await self.async_load()
+        return [d for d in self._ha_devices.values() if d.location == location]
+
+    async def async_save_ha_device(self, device: HARemoteDevice) -> None:
+        """Save or update an HA device."""
+        await self.async_load()
+        self._ha_devices[device.device_id] = device
+        await self._async_save_ha_devices()
+
+    async def async_delete_ha_device(self, device_id: str) -> None:
+        """Delete an HA device."""
+        await self.async_load()
+        if device_id in self._ha_devices:
+            del self._ha_devices[device_id]
+            await self._async_save_ha_devices()
 
 
 def get_storage(hass: HomeAssistant) -> VDAIRStorage:

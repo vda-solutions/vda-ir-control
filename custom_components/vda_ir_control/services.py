@@ -18,6 +18,8 @@ from .models import (
     SerialConfig,
     DeviceCommand,
     ResponsePattern,
+    HARemoteDevice,
+    HADeviceFamily,
 )
 from .storage import get_storage
 from .ir_profiles import get_profile_by_id as get_builtin_profile
@@ -214,6 +216,15 @@ SEND_RAW_SERIAL_COMMAND_SCHEMA = vol.Schema({
     vol.Optional("line_ending", default="none"): vol.In(["none", "cr", "lf", "crlf", "!"]),
     vol.Optional("wait_for_response", default=False): bool,
     vol.Optional("timeout", default=2.0): float,
+})
+
+# HA Remote Device schemas
+SEND_HA_COMMAND_SCHEMA = vol.Schema({
+    vol.Required("device_id"): str,
+    vol.Required("command"): str,
+    vol.Optional("num_repeats", default=1): vol.Range(min=1, max=10),
+    vol.Optional("delay_secs", default=0): vol.Coerce(float),
+    vol.Optional("hold_secs", default=0): vol.Coerce(float),
 })
 
 
@@ -1066,6 +1077,76 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         except Exception as err:
             raise ServiceValidationError(f"Failed to send command: {err}")
 
+    # ========== HA Remote Device Services ==========
+
+    async def handle_send_ha_command(call: ServiceCall) -> Dict[str, Any]:
+        """Handle send_ha_command service - sends commands to HA remote devices."""
+        device_id = call.data["device_id"]
+        command = call.data["command"]
+        num_repeats = call.data.get("num_repeats", 1)
+        delay_secs = call.data.get("delay_secs", 0)
+        hold_secs = call.data.get("hold_secs", 0)
+
+        # Get the HA device from storage
+        storage = get_storage(hass)
+        device = await storage.async_get_ha_device(device_id)
+        if device is None:
+            raise ServiceValidationError(f"HA device '{device_id}' not found")
+
+        entity_id = device.entity_id
+        device_family = device.device_family
+
+        # Determine which service to call based on device family
+        try:
+            if device_family in [HADeviceFamily.APPLE_TV, HADeviceFamily.ROKU]:
+                # Use remote.send_command
+                service_data = {
+                    "entity_id": entity_id,
+                    "command": command,
+                    "num_repeats": num_repeats,
+                    "delay_secs": delay_secs,
+                    "hold_secs": hold_secs,
+                }
+                await hass.services.async_call("remote", "send_command", service_data)
+
+            elif device_family in [HADeviceFamily.ANDROID_TV, HADeviceFamily.FIRE_TV, HADeviceFamily.NVIDIA_SHIELD]:
+                # Use androidtv.adb_command
+                service_data = {
+                    "entity_id": entity_id,
+                    "command": command,
+                }
+                await hass.services.async_call("androidtv", "adb_command", service_data)
+
+            elif device_family == HADeviceFamily.CHROMECAST:
+                # Use remote.send_command (Chromecast also supports remote)
+                service_data = {
+                    "entity_id": entity_id,
+                    "command": command,
+                }
+                await hass.services.async_call("remote", "send_command", service_data)
+
+            else:
+                # Custom - try remote.send_command first
+                service_data = {
+                    "entity_id": entity_id,
+                    "command": command,
+                    "num_repeats": num_repeats,
+                    "delay_secs": delay_secs,
+                    "hold_secs": hold_secs,
+                }
+                await hass.services.async_call("remote", "send_command", service_data)
+
+            _LOGGER.info("Sent HA command '%s' to %s (%s)", command, device_id, entity_id)
+            return {
+                "success": True,
+                "device_id": device_id,
+                "command": command,
+            }
+
+        except Exception as err:
+            _LOGGER.error("Failed to send HA command: %s", err)
+            raise ServiceValidationError(f"Failed to send command: {err}")
+
     # ========== Register All Services ==========
 
     # Original services
@@ -1188,6 +1269,12 @@ async def async_setup_services(hass: HomeAssistant) -> None:
     hass.services.async_register(
         DOMAIN, "send_raw_serial_command", handle_send_raw_serial_command,
         schema=SEND_RAW_SERIAL_COMMAND_SCHEMA, supports_response=SupportsResponse.OPTIONAL
+    )
+
+    # HA Remote Device services
+    hass.services.async_register(
+        DOMAIN, "send_ha_command", handle_send_ha_command,
+        schema=SEND_HA_COMMAND_SCHEMA, supports_response=SupportsResponse.OPTIONAL
     )
 
     _LOGGER.info("VDA IR Control services registered")

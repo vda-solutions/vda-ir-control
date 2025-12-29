@@ -1077,6 +1077,7 @@ class VDAIRSerialDeviceView(HomeAssistantView):
             "matrix_inputs": [i.to_dict() for i in device.matrix_inputs],
             "matrix_outputs": [o.to_dict() for o in device.matrix_outputs],
             "routing_template": device.routing_template,
+            "query_template": device.query_template,
             "connected": coordinator.is_connected if coordinator else False,
             "device_state": coordinator.device_state.to_dict() if coordinator else None,
         })
@@ -1123,6 +1124,10 @@ class VDAIRSerialDeviceView(HomeAssistantView):
         # Update routing template if provided
         if "routing_template" in data:
             device.routing_template = data["routing_template"]
+
+        # Update query template if provided
+        if "query_template" in data:
+            device.query_template = data["query_template"]
 
         await storage.async_save_serial_device(device)
         _LOGGER.info("Updated serial device: %s", device_id)

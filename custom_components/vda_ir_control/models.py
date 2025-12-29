@@ -471,6 +471,9 @@ class SerialDevice:
     # Routing command template with {input} and {output} placeholders
     # Example: "s in {input} av out {output}!" for OREI matrices
     routing_template: str = ""
+    # Query template with {output} placeholder to query current input for an output
+    # Example: "r av out {output}!" for OREI matrices
+    query_template: str = ""
 
     def add_command(self, command: DeviceCommand) -> None:
         """Add a command to this device."""
@@ -502,6 +505,7 @@ class SerialDevice:
             "matrix_inputs": [i.to_dict() for i in self.matrix_inputs],
             "matrix_outputs": [o.to_dict() for o in self.matrix_outputs],
             "routing_template": self.routing_template,
+            "query_template": self.query_template,
         }
 
     @classmethod
@@ -538,4 +542,5 @@ class SerialDevice:
             matrix_inputs=matrix_inputs,
             matrix_outputs=matrix_outputs,
             routing_template=data.get("routing_template", ""),
+            query_template=data.get("query_template", ""),
         )

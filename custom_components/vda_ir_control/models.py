@@ -544,3 +544,53 @@ class SerialDevice:
             routing_template=data.get("routing_template", ""),
             query_template=data.get("query_template", ""),
         )
+
+
+@dataclass
+class DeviceGroupMember:
+    """A member device in a group."""
+    device_id: str
+    device_type: str  # 'controlled' for IR devices, 'serial' for serial devices
+
+    def to_dict(self) -> dict:
+        return {"device_id": self.device_id, "device_type": self.device_type}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "DeviceGroupMember":
+        return cls(
+            device_id=data["device_id"],
+            device_type=data.get("device_type", "controlled"),
+        )
+
+
+@dataclass
+class DeviceGroup:
+    """A group of devices that can be controlled together."""
+    group_id: str
+    name: str
+    members: List[DeviceGroupMember] = field(default_factory=list)
+    sequence_delay_ms: int = 20  # Delay between commands in milliseconds
+    location: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "group_id": self.group_id,
+            "name": self.name,
+            "members": [m.to_dict() for m in self.members],
+            "sequence_delay_ms": self.sequence_delay_ms,
+            "location": self.location,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "DeviceGroup":
+        members = [
+            DeviceGroupMember.from_dict(m)
+            for m in data.get("members", [])
+        ]
+        return cls(
+            group_id=data["group_id"],
+            name=data["name"],
+            members=members,
+            sequence_delay_ms=data.get("sequence_delay_ms", 20),
+            location=data.get("location", ""),
+        )

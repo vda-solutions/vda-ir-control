@@ -12,6 +12,7 @@ from .models import (
     DeviceProfile,
     ControlledDevice,
     SerialDevice,
+    DeviceGroup,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -21,6 +22,7 @@ STORAGE_KEY_BOARDS = f"{DOMAIN}_boards"
 STORAGE_KEY_PROFILES = f"{DOMAIN}_profiles"
 STORAGE_KEY_DEVICES = f"{DOMAIN}_devices"
 STORAGE_KEY_SERIAL_DEVICES = f"{DOMAIN}_serial_devices"
+STORAGE_KEY_DEVICE_GROUPS = f"{DOMAIN}_device_groups"
 
 
 class VDAIRStorage:
@@ -33,12 +35,14 @@ class VDAIRStorage:
         self._profiles_store = Store(hass, STORAGE_VERSION, STORAGE_KEY_PROFILES)
         self._devices_store = Store(hass, STORAGE_VERSION, STORAGE_KEY_DEVICES)
         self._serial_devices_store = Store(hass, STORAGE_VERSION, STORAGE_KEY_SERIAL_DEVICES)
+        self._device_groups_store = Store(hass, STORAGE_VERSION, STORAGE_KEY_DEVICE_GROUPS)
 
         # In-memory cache
         self._boards: Dict[str, BoardConfig] = {}
         self._profiles: Dict[str, DeviceProfile] = {}
         self._devices: Dict[str, ControlledDevice] = {}
         self._serial_devices: Dict[str, SerialDevice] = {}
+        self._device_groups: Dict[str, DeviceGroup] = {}
         self._loaded = False
 
     async def async_load(self) -> None:
@@ -82,13 +86,23 @@ class VDAIRStorage:
                 except Exception as err:
                     _LOGGER.error("Failed to load serial device %s: %s", device_id, err)
 
+        # Load device groups
+        device_groups_data = await self._device_groups_store.async_load()
+        if device_groups_data:
+            for group_id, group_dict in device_groups_data.items():
+                try:
+                    self._device_groups[group_id] = DeviceGroup.from_dict(group_dict)
+                except Exception as err:
+                    _LOGGER.error("Failed to load device group %s: %s", group_id, err)
+
         self._loaded = True
         _LOGGER.info(
-            "Loaded %d boards, %d profiles, %d IR devices, %d serial devices",
+            "Loaded %d boards, %d profiles, %d IR devices, %d serial devices, %d device groups",
             len(self._boards),
             len(self._profiles),
             len(self._devices),
             len(self._serial_devices),
+            len(self._device_groups),
         )
 
     async def _async_save_boards(self) -> None:
@@ -110,6 +124,11 @@ class VDAIRStorage:
         """Save serial devices to storage."""
         data = {k: v.to_dict() for k, v in self._serial_devices.items()}
         await self._serial_devices_store.async_save(data)
+
+    async def _async_save_device_groups(self) -> None:
+        """Save device groups to storage."""
+        data = {k: v.to_dict() for k, v in self._device_groups.items()}
+        await self._device_groups_store.async_save(data)
 
     # Board operations
     async def async_get_board(self, board_id: str) -> Optional[BoardConfig]:
@@ -301,6 +320,30 @@ class VDAIRStorage:
             _LOGGER.info("Deleted command %s from serial device %s", command_id, device_id)
             return True
         return False
+
+    # Device group operations
+    async def async_get_device_group(self, group_id: str) -> Optional[DeviceGroup]:
+        """Get a device group by ID."""
+        await self.async_load()
+        return self._device_groups.get(group_id)
+
+    async def async_get_all_device_groups(self) -> List[DeviceGroup]:
+        """Get all device groups."""
+        await self.async_load()
+        return list(self._device_groups.values())
+
+    async def async_save_device_group(self, group: DeviceGroup) -> None:
+        """Save or update a device group."""
+        await self.async_load()
+        self._device_groups[group.group_id] = group
+        await self._async_save_device_groups()
+
+    async def async_delete_device_group(self, group_id: str) -> None:
+        """Delete a device group."""
+        await self.async_load()
+        if group_id in self._device_groups:
+            del self._device_groups[group_id]
+            await self._async_save_device_groups()
 
 
 def get_storage(hass: HomeAssistant) -> VDAIRStorage:

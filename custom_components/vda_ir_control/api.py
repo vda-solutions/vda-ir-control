@@ -28,7 +28,7 @@ from .ir_profiles import (
     get_available_device_types,
 )
 from .profile_manager import get_profile_manager
-from .models import SerialDevice, SerialConfig, DeviceCommand, ResponsePattern
+from .models import SerialDevice, SerialConfig, DeviceCommand, ResponsePattern, DeviceGroup, DeviceGroupMember
 from .serial_coordinator import (
     get_serial_coordinator,
     async_setup_serial_coordinator,
@@ -1382,6 +1382,172 @@ class VDAIRBoardSerialConfigView(HomeAssistantView):
         })
 
 
+class VDAIRDeviceGroupsView(HomeAssistantView):
+    """API endpoint for device groups."""
+
+    url = "/api/vda_ir_control/device_groups"
+    name = "api:vda_ir_control:device_groups"
+    requires_auth = True
+
+    async def get(self, request):
+        """Get all device groups."""
+        hass = request.app["hass"]
+        storage = get_storage(hass)
+        groups = await storage.async_get_all_device_groups()
+
+        result = []
+        for group in groups:
+            result.append({
+                "group_id": group.group_id,
+                "name": group.name,
+                "members": [m.to_dict() for m in group.members],
+                "member_count": len(group.members),
+                "sequence_delay_ms": group.sequence_delay_ms,
+                "location": group.location,
+            })
+
+        return self.json({
+            "groups": result,
+            "total": len(result),
+        })
+
+    async def post(self, request):
+        """Create a new device group."""
+        hass = request.app["hass"]
+        storage = get_storage(hass)
+
+        try:
+            data = await request.json()
+        except Exception:
+            return self.json({"error": "Invalid JSON"}, status_code=400)
+
+        # Validate required fields
+        required = ["group_id", "name"]
+        for field in required:
+            if field not in data:
+                return self.json({"error": f"Missing required field: {field}"}, status_code=400)
+
+        members = []
+        for m in data.get("members", []):
+            members.append(DeviceGroupMember(
+                device_id=m["device_id"],
+                device_type=m.get("device_type", "controlled"),
+            ))
+
+        group = DeviceGroup(
+            group_id=data["group_id"],
+            name=data["name"],
+            members=members,
+            sequence_delay_ms=data.get("sequence_delay_ms", 20),
+            location=data.get("location", ""),
+        )
+
+        await storage.async_save_device_group(group)
+        _LOGGER.info("Created device group: %s", group.group_id)
+
+        return self.json({
+            "success": True,
+            "group_id": group.group_id,
+        })
+
+
+class VDAIRDeviceGroupView(HomeAssistantView):
+    """API endpoint for a single device group."""
+
+    url = "/api/vda_ir_control/device_groups/{group_id}"
+    name = "api:vda_ir_control:device_group"
+    requires_auth = True
+
+    async def get(self, request, group_id):
+        """Get a single device group with member details."""
+        hass = request.app["hass"]
+        storage = get_storage(hass)
+        group = await storage.async_get_device_group(group_id)
+
+        if not group:
+            return self.json({"error": "Group not found"}, status_code=404)
+
+        # Get details for each member device
+        member_details = []
+        for member in group.members:
+            if member.device_type == "controlled":
+                device = await storage.async_get_device(member.device_id)
+                if device:
+                    member_details.append({
+                        "device_id": member.device_id,
+                        "device_type": member.device_type,
+                        "name": device.name,
+                        "location": device.location,
+                    })
+            elif member.device_type == "serial":
+                device = await storage.async_get_serial_device(member.device_id)
+                if device:
+                    member_details.append({
+                        "device_id": member.device_id,
+                        "device_type": member.device_type,
+                        "name": device.name,
+                        "location": device.location,
+                    })
+
+        return self.json({
+            "group_id": group.group_id,
+            "name": group.name,
+            "members": [m.to_dict() for m in group.members],
+            "member_details": member_details,
+            "sequence_delay_ms": group.sequence_delay_ms,
+            "location": group.location,
+        })
+
+    async def put(self, request, group_id):
+        """Update a device group."""
+        hass = request.app["hass"]
+        storage = get_storage(hass)
+
+        group = await storage.async_get_device_group(group_id)
+        if not group:
+            return self.json({"error": "Group not found"}, status_code=404)
+
+        try:
+            data = await request.json()
+        except Exception:
+            return self.json({"error": "Invalid JSON"}, status_code=400)
+
+        # Update fields
+        if "name" in data:
+            group.name = data["name"]
+        if "location" in data:
+            group.location = data["location"]
+        if "sequence_delay_ms" in data:
+            group.sequence_delay_ms = data["sequence_delay_ms"]
+        if "members" in data:
+            group.members = [
+                DeviceGroupMember(
+                    device_id=m["device_id"],
+                    device_type=m.get("device_type", "controlled"),
+                )
+                for m in data["members"]
+            ]
+
+        await storage.async_save_device_group(group)
+        _LOGGER.info("Updated device group: %s", group_id)
+
+        return self.json({"success": True})
+
+    async def delete(self, request, group_id):
+        """Delete a device group."""
+        hass = request.app["hass"]
+        storage = get_storage(hass)
+
+        group = await storage.async_get_device_group(group_id)
+        if not group:
+            return self.json({"error": "Group not found"}, status_code=404)
+
+        await storage.async_delete_device_group(group_id)
+        _LOGGER.info("Deleted device group: %s", group_id)
+
+        return self.json({"success": True})
+
+
 async def async_setup_api(hass: HomeAssistant) -> None:
     """Set up the REST API."""
     # IR device endpoints
@@ -1417,5 +1583,9 @@ async def async_setup_api(hass: HomeAssistant) -> None:
     hass.http.register_view(VDAIRSerialDeviceSendView())
     hass.http.register_view(VDAIRSerialDeviceStateView())
     hass.http.register_view(VDAIRBoardSerialConfigView())
+
+    # Device group endpoints
+    hass.http.register_view(VDAIRDeviceGroupsView())
+    hass.http.register_view(VDAIRDeviceGroupView())
 
     _LOGGER.info("VDA IR Control REST API registered")

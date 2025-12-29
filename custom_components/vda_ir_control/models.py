@@ -466,6 +466,9 @@ class SerialDevice:
     # For HDMI matrices - input/output configuration
     matrix_inputs: List[MatrixInput] = field(default_factory=list)
     matrix_outputs: List[MatrixOutput] = field(default_factory=list)
+    # Routing command template with {input} and {output} placeholders
+    # Example: "s in {input} av out {output}!" for OREI matrices
+    routing_template: str = ""
 
     def add_command(self, command: DeviceCommand) -> None:
         """Add a command to this device."""
@@ -496,6 +499,7 @@ class SerialDevice:
             "global_response_patterns": [p.to_dict() for p in self.global_response_patterns],
             "matrix_inputs": [i.to_dict() for i in self.matrix_inputs],
             "matrix_outputs": [o.to_dict() for o in self.matrix_outputs],
+            "routing_template": self.routing_template,
         }
 
     @classmethod
@@ -531,4 +535,5 @@ class SerialDevice:
             global_response_patterns=patterns,
             matrix_inputs=matrix_inputs,
             matrix_outputs=matrix_outputs,
+            routing_template=data.get("routing_template", ""),
         )

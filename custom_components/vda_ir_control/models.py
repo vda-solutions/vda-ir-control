@@ -418,9 +418,10 @@ class MatrixInput:
     index: int
     name: str = ""
     device_id: Optional[str] = None  # Linked source device (Apple TV, Roku, etc.)
+    enabled: bool = True  # Whether this input is shown in TV source selection
 
     def to_dict(self) -> dict:
-        return {"index": self.index, "name": self.name, "device_id": self.device_id}
+        return {"index": self.index, "name": self.name, "device_id": self.device_id, "enabled": self.enabled}
 
     @classmethod
     def from_dict(cls, data: dict) -> "MatrixInput":
@@ -428,6 +429,7 @@ class MatrixInput:
             index=data.get("index", 1),
             name=data.get("name", ""),
             device_id=data.get("device_id"),
+            enabled=data.get("enabled", True),
         )
 
 

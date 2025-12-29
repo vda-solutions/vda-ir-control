@@ -1103,6 +1103,7 @@ class VDAIRSerialDeviceView(HomeAssistantView):
                     index=i.get("index", idx+1),
                     name=i.get("name", ""),
                     device_id=i.get("device_id"),
+                    enabled=i.get("enabled", True),
                 )
                 for idx, i in enumerate(data["matrix_inputs"])
             ]

@@ -1739,14 +1739,18 @@ class VDAIRHAEntitiesView(HomeAssistantView):
 
     async def get(self, request):
         """Get available remote and media_player entities."""
+        from homeassistant.helpers import entity_registry as er
+
         hass = request.app["hass"]
         entities = []
+        registry = er.async_get(hass)
 
         # Find remote entities
-        for entity_id, state in hass.states.async_all():
+        for state in hass.states.async_all():
+            entity_id = state.entity_id
             if entity_id.startswith("remote."):
                 platform = None
-                entity_entry = hass.data.get("entity_registry", {}).get(entity_id)
+                entity_entry = registry.async_get(entity_id)
                 if entity_entry:
                     platform = entity_entry.platform
 
@@ -1760,24 +1764,26 @@ class VDAIRHAEntitiesView(HomeAssistantView):
                     elif "androidtv" in platform:
                         device_family = "android_tv"
 
+                friendly_name = state.attributes.get("friendly_name", entity_id)
                 entities.append({
                     "entity_id": entity_id,
-                    "friendly_name": state.attributes.get("friendly_name", entity_id),
+                    "name": friendly_name,
+                    "domain": "remote",
                     "platform": platform,
                     "device_family": device_family,
-                    "type": "remote",
                 })
 
         # Find media_player entities that might be controllable
-        for entity_id, state in hass.states.async_all():
+        for state in hass.states.async_all():
+            entity_id = state.entity_id
             if entity_id.startswith("media_player."):
                 platform = None
-                entity_entry = hass.data.get("entity_registry", {}).get(entity_id)
+                entity_entry = registry.async_get(entity_id)
                 if entity_entry:
                     platform = entity_entry.platform
 
-                # Only include certain platforms
-                device_family = None
+                # Include all media players - user can choose
+                device_family = "custom"
                 if platform:
                     if "apple_tv" in platform:
                         device_family = "apple_tv"
@@ -1788,16 +1794,16 @@ class VDAIRHAEntitiesView(HomeAssistantView):
                     elif "cast" in platform:
                         device_family = "chromecast"
 
-                if device_family:
-                    entities.append({
-                        "entity_id": entity_id,
-                        "friendly_name": state.attributes.get("friendly_name", entity_id),
-                        "platform": platform,
-                        "device_family": device_family,
-                        "type": "media_player",
-                    })
+                friendly_name = state.attributes.get("friendly_name", entity_id)
+                entities.append({
+                    "entity_id": entity_id,
+                    "name": friendly_name,
+                    "domain": "media_player",
+                    "platform": platform,
+                    "device_family": device_family,
+                })
 
-        return self.json(entities)
+        return self.json({"entities": entities})
 
 
 async def async_setup_api(hass: HomeAssistant) -> None:

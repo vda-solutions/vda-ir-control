@@ -108,6 +108,7 @@ CREATE_DEVICE_SCHEMA = vol.Schema({
     vol.Optional("matrix_device_type"): vol.Any(vol.In(["network", "serial"]), None),
     vol.Optional("matrix_port_type"): vol.Any(vol.In(["input", "output"]), None),
     vol.Optional("matrix_port"): vol.Any(str, None),
+    vol.Optional("matrix_output"): vol.Any(str, None),  # Backward compat alias for matrix_port
 })
 
 DELETE_DEVICE_SCHEMA = vol.Schema({
@@ -540,6 +541,9 @@ async def async_setup_services(hass: HomeAssistant) -> None:
                 raise ServiceValidationError(f"Profile '{profile_id}' not found")
             device_profile_id = profile_id
 
+        # Handle backward compat: matrix_output -> matrix_port
+        matrix_port = call.data.get("matrix_port") or call.data.get("matrix_output")
+
         device = ControlledDevice(
             device_id=call.data["device_id"],
             name=call.data["name"],
@@ -550,7 +554,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
             matrix_device_id=call.data.get("matrix_device_id"),
             matrix_device_type=call.data.get("matrix_device_type"),
             matrix_port_type=call.data.get("matrix_port_type"),
-            matrix_port=call.data.get("matrix_port"),
+            matrix_port=matrix_port,
         )
 
         await storage.async_save_device(device)

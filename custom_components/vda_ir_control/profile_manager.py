@@ -301,14 +301,21 @@ class ProfileManager:
         """Get a community profile by ID.
 
         Args:
-            profile_id: The profile ID to look up
+            profile_id: The profile ID to look up (can be storage key or internal profile_id)
 
         Returns:
             Profile dict with _source field, or None if not found
         """
+        # First try direct key lookup
         profile = self._community_profiles.get(profile_id)
         if profile:
             return {**profile, "_source": "community"}
+
+        # Also search by internal profile_id in case key differs
+        for key, prof in self._community_profiles.items():
+            if prof.get("profile_id") == profile_id:
+                return {**prof, "_source": "community"}
+
         return None
 
     def get_profile(self, profile_id: str, source: Optional[str] = None) -> Optional[Dict[str, Any]]:

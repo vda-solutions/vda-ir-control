@@ -1575,7 +1575,7 @@ class VDAIRHADevicesView(HomeAssistantView):
         hass = request.app["hass"]
         storage = get_storage(hass)
         devices = await storage.async_get_all_ha_devices()
-        return self.json([d.to_dict() for d in devices])
+        return self.json({"devices": [d.to_dict() for d in devices]})
 
     async def post(self, request):
         """Create a new HA device."""

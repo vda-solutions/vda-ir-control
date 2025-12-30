@@ -788,8 +788,17 @@ async def async_setup_services(hass: HomeAssistant) -> None:
 
             ir_code_data = ir_code.raw_code
             protocol = ir_code.protocol
-            raw_data = None
-            frequency = None
+            frequency = ir_code.frequency
+
+            # For raw protocol, convert string timing data to array
+            if protocol == "raw" and ir_code.raw_code:
+                try:
+                    raw_data = [int(x) for x in ir_code.raw_code.split()]
+                except ValueError:
+                    _LOGGER.error("Invalid raw code format for command %s", command)
+                    raw_data = None
+            else:
+                raw_data = None
 
         # Get coordinator and send
         coordinator = _get_board_coordinator(device.board_id)

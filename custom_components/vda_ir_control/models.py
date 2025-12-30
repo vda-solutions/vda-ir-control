@@ -559,6 +559,7 @@ class HADeviceFamily(Enum):
     CHROMECAST = "chromecast"
     NVIDIA_SHIELD = "nvidia_shield"
     FIRE_TV = "fire_tv"
+    DIRECTV = "directv"
     CUSTOM = "custom"
 
 
@@ -592,6 +593,13 @@ HA_DEVICE_COMMANDS = {
         "UP", "DOWN", "LEFT", "RIGHT", "CENTER", "BACK", "HOME", "MENU",
         "PLAY", "PAUSE", "STOP", "NEXT", "PREVIOUS", "VOLUME_UP", "VOLUME_DOWN",
         "MUTE", "POWER"
+    ],
+    HADeviceFamily.DIRECTV: [
+        "up", "down", "left", "right", "select", "menu", "guide", "info",
+        "exit", "back", "play", "pause", "stop", "record", "ffwd", "rew",
+        "advance", "replay", "power", "poweron", "poweroff", "chanup", "chandown",
+        "prev", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "dash", "enter",
+        "active", "list", "format", "red", "green", "yellow", "blue"
     ],
     HADeviceFamily.CUSTOM: [],
 }

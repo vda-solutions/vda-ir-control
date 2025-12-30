@@ -619,6 +619,8 @@ class HARemoteDevice:
     matrix_port: Optional[str] = None  # Which input port on the matrix this device is connected to
     # Custom commands (if device_family is CUSTOM or to override defaults)
     custom_commands: List[str] = field(default_factory=list)
+    # Optional media_player entity for now playing info (e.g., media_player.directv_xxx)
+    media_player_entity_id: Optional[str] = None
 
     def get_commands(self) -> List[str]:
         """Get the list of available commands for this device."""
@@ -637,6 +639,7 @@ class HARemoteDevice:
             "matrix_device_type": self.matrix_device_type,
             "matrix_port": self.matrix_port,
             "custom_commands": self.custom_commands,
+            "media_player_entity_id": self.media_player_entity_id,
         }
 
     @classmethod
@@ -651,6 +654,7 @@ class HARemoteDevice:
             matrix_device_type=data.get("matrix_device_type"),
             matrix_port=data.get("matrix_port"),
             custom_commands=data.get("custom_commands", []),
+            media_player_entity_id=data.get("media_player_entity_id"),
         )
 
 

@@ -1134,6 +1134,17 @@ async def async_setup_services(hass: HomeAssistant) -> None:
                 }
                 await hass.services.async_call("remote", "send_command", service_data)
 
+            elif device_family == HADeviceFamily.DIRECTV:
+                # DirecTV uses remote.send_command
+                service_data = {
+                    "entity_id": entity_id,
+                    "command": command,
+                    "num_repeats": num_repeats,
+                    "delay_secs": delay_secs,
+                    "hold_secs": hold_secs,
+                }
+                await hass.services.async_call("remote", "send_command", service_data, blocking=True)
+
             else:
                 # Custom - try remote.send_command first
                 service_data = {

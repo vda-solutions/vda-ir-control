@@ -983,6 +983,8 @@ class VDAIRSerialDevicesView(HomeAssistantView):
                 "location": device.location,
                 "connected": coordinator.is_connected if coordinator else False,
                 "command_count": len(device.commands),
+                "matrix_inputs": [{"index": i.index, "name": i.name, "device_id": i.device_id, "enabled": i.enabled} for i in device.matrix_inputs] if device.matrix_inputs else [],
+                "matrix_outputs": [{"index": o.index, "name": o.name} for o in device.matrix_outputs] if device.matrix_outputs else [],
             })
 
         return self.json({

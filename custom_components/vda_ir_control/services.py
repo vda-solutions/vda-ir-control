@@ -1119,12 +1119,22 @@ async def async_setup_services(hass: HomeAssistant) -> None:
                 await hass.services.async_call("remote", "send_command", service_data)
 
             elif device_family in [HADeviceFamily.ANDROID_TV, HADeviceFamily.FIRE_TV, HADeviceFamily.NVIDIA_SHIELD]:
-                # Use androidtv.adb_command
+                # Use remote.send_command for Android TV/Fire TV remote entities
+                # Commands should be uppercase for Fire TV (e.g., HOME, BACK, UP)
+                cmd = command
+                if device_family == HADeviceFamily.FIRE_TV:
+                    # Map common command names to Fire TV's expected format
+                    fire_tv_map = {
+                        'select': 'CENTER', 'enter': 'CENTER', 'ok': 'CENTER',
+                        'fastforward': 'NEXT', 'fast_forward': 'NEXT', 'ffwd': 'NEXT',
+                        'rewind': 'PREVIOUS', 'rew': 'PREVIOUS',
+                    }
+                    cmd = fire_tv_map.get(command.lower(), command.upper())
                 service_data = {
                     "entity_id": entity_id,
-                    "command": command,
+                    "command": cmd,
                 }
-                await hass.services.async_call("androidtv", "adb_command", service_data)
+                await hass.services.async_call("remote", "send_command", service_data)
 
             elif device_family == HADeviceFamily.CHROMECAST:
                 # Use remote.send_command (Chromecast also supports remote)

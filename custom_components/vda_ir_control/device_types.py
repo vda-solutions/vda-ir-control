@@ -89,7 +89,7 @@ ESP32_POE_ISO_PINS: Dict[int, GPIOPin] = {
     39: GPIOPin(39, "GPIO39", True, False, "PWR SENSE - Input only, external power detection", True),
 }
 
-# Reserved pins (Ethernet) - NOT available for IR use
+# Reserved pins (Ethernet) - NOT available for IR use on POE-ISO
 ESP32_POE_ISO_RESERVED: Dict[int, str] = {
     17: "EMAC_CLK - Ethernet clock (RMII)",
     18: "MDIO - Ethernet management data",
@@ -102,19 +102,53 @@ ESP32_POE_ISO_RESERVED: Dict[int, str] = {
     27: "EMAC_RX_DV - Ethernet RX data valid",
 }
 
+# ESP32 DevKit GPIO Pin Definitions (WiFi version - no Ethernet reservation)
+ESP32_DEVKIT_PINS: Dict[int, GPIOPin] = {
+    4: GPIOPin(4, "GPIO4", True, True, "General purpose IO", True),
+    5: GPIOPin(5, "GPIO5", True, True, "General purpose IO", True),
+    12: GPIOPin(12, "GPIO12", True, True, "General purpose IO", True),
+    13: GPIOPin(13, "GPIO13", True, True, "General purpose IO", True),
+    14: GPIOPin(14, "GPIO14", True, True, "General purpose IO", True),
+    15: GPIOPin(15, "GPIO15", True, True, "General purpose IO", True),
+    16: GPIOPin(16, "GPIO16", True, True, "General purpose IO", True),
+    17: GPIOPin(17, "GPIO17", True, True, "General purpose IO", True),
+    18: GPIOPin(18, "GPIO18", True, True, "General purpose IO", True),
+    19: GPIOPin(19, "GPIO19", True, True, "General purpose IO", True),
+    21: GPIOPin(21, "GPIO21", True, True, "General purpose IO (I2C SDA)", True),
+    22: GPIOPin(22, "GPIO22", True, True, "General purpose IO (I2C SCL)", True),
+    23: GPIOPin(23, "GPIO23", True, True, "General purpose IO", True),
+    25: GPIOPin(25, "GPIO25", True, True, "General purpose IO (DAC1)", True),
+    26: GPIOPin(26, "GPIO26", True, True, "General purpose IO (DAC2)", True),
+    27: GPIOPin(27, "GPIO27", True, True, "General purpose IO", True),
+    32: GPIOPin(32, "GPIO32", True, True, "General purpose IO", True),
+    33: GPIOPin(33, "GPIO33", True, True, "General purpose IO", True),
+    # Input-only pins (good for IR receiver)
+    34: GPIOPin(34, "GPIO34", True, False, "Input only", True),
+    35: GPIOPin(35, "GPIO35", True, False, "Input only", True),
+    36: GPIOPin(36, "GPIO36", True, False, "Input only (VP)", True),
+    39: GPIOPin(39, "GPIO39", True, False, "Input only (VN)", True),
+}
 
-def get_available_ir_pins(for_input: bool = False, for_output: bool = False) -> List[GPIOPin]:
+
+def get_available_ir_pins(for_input: bool = False, for_output: bool = False, board_type: str = "poe_iso") -> List[GPIOPin]:
     """Get list of GPIO pins available for IR use.
 
     Args:
         for_input: Filter for pins that can be used as IR input (receivers)
         for_output: Filter for pins that can be used as IR output (transmitters)
+        board_type: Board type - "poe_iso" for ESP32-POE-ISO, "devkit" for ESP32 DevKit
 
     Returns:
         List of GPIOPin objects that match the criteria
     """
+    # Select pin definitions based on board type
+    if board_type == "devkit":
+        pin_definitions = ESP32_DEVKIT_PINS
+    else:
+        pin_definitions = ESP32_POE_ISO_PINS
+
     pins = []
-    for gpio, pin in ESP32_POE_ISO_PINS.items():
+    for gpio, pin in pin_definitions.items():
         if not pin.ir_capable:
             continue
         if for_input and not pin.can_input:
@@ -125,8 +159,39 @@ def get_available_ir_pins(for_input: bool = False, for_output: bool = False) -> 
     return sorted(pins, key=lambda p: p.gpio)
 
 
-def get_gpio_info(gpio: int) -> Optional[GPIOPin]:
+def get_all_pins_for_board(board_type: str = "poe_iso") -> List[GPIOPin]:
+    """Get all GPIO pins for a board type.
+
+    Args:
+        board_type: Board type - "poe_iso" for ESP32-POE-ISO, "devkit" for ESP32 DevKit
+
+    Returns:
+        List of all GPIOPin objects for the board type
+    """
+    if board_type == "devkit":
+        return list(ESP32_DEVKIT_PINS.values())
+    return list(ESP32_POE_ISO_PINS.values())
+
+
+def get_reserved_pins_for_board(board_type: str = "poe_iso") -> Dict[int, str]:
+    """Get reserved pins for a board type.
+
+    Args:
+        board_type: Board type - "poe_iso" for ESP32-POE-ISO, "devkit" for ESP32 DevKit
+
+    Returns:
+        Dict of reserved GPIO pins and their reasons
+    """
+    if board_type == "devkit":
+        # DevKit has no reserved pins (no Ethernet)
+        return {}
+    return ESP32_POE_ISO_RESERVED
+
+
+def get_gpio_info(gpio: int, board_type: str = "poe_iso") -> Optional[GPIOPin]:
     """Get information about a specific GPIO pin."""
+    if board_type == "devkit":
+        return ESP32_DEVKIT_PINS.get(gpio)
     return ESP32_POE_ISO_PINS.get(gpio)
 
 

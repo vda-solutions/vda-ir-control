@@ -49,6 +49,7 @@ class BoardConfig:
     mac_address: str
     port: int = 80
     total_ports: int = 8  # Default, can be configured
+    board_type: str = "poe_iso"  # "poe_iso" for ESP32-POE-ISO, "devkit" for ESP32 DevKit
     ports: Dict[int, PortConfig] = field(default_factory=dict)
 
     def __post_init__(self):
@@ -73,6 +74,7 @@ class BoardConfig:
             "mac_address": self.mac_address,
             "port": self.port,
             "total_ports": self.total_ports,
+            "board_type": self.board_type,
             "ports": {k: v.to_dict() for k, v in self.ports.items()},
         }
 
@@ -90,6 +92,7 @@ class BoardConfig:
             mac_address=data["mac_address"],
             port=data.get("port", 80),
             total_ports=data.get("total_ports", 8),
+            board_type=data.get("board_type", "poe_iso"),
             ports=ports,
         )
 

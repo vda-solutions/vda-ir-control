@@ -18,6 +18,8 @@ from .device_types import (
     ESP32_POE_ISO_PINS,
     ESP32_POE_ISO_RESERVED,
     get_available_ir_pins,
+    get_all_pins_for_board,
+    get_reserved_pins_for_board,
 )
 from .ir_profiles import (
     get_all_profiles,
@@ -59,12 +61,18 @@ class VDAIRBoardsView(HomeAssistantView):
     async def get(self, request):
         """Get all configured boards."""
         hass = request.app["hass"]
+        storage = get_storage(hass)
         boards = []
+
+        # Get stored board configs for board_type
+        stored_boards = await storage.async_get_all_boards()
+        stored_board_map = {b.board_id: b for b in stored_boards}
 
         for entry_id, coord in hass.data.get(DOMAIN, {}).items():
             if entry_id == "storage":
                 continue
             if hasattr(coord, "board_id"):
+                stored = stored_board_map.get(coord.board_id)
                 boards.append({
                     "board_id": coord.board_id,
                     "board_name": coord.board_info.get("board_name", coord.board_id),
@@ -73,11 +81,67 @@ class VDAIRBoardsView(HomeAssistantView):
                     "firmware_version": coord.board_info.get("firmware_version", "Unknown"),
                     "output_count": len(coord.ir_outputs),
                     "online": True,  # If we have a coordinator, it's online
+                    "board_type": stored.board_type if stored else "poe_iso",
                 })
 
         return self.json({
             "boards": boards,
             "total": len(boards),
+        })
+
+
+class VDAIRBoardView(HomeAssistantView):
+    """API endpoint for a single board."""
+
+    url = "/api/vda_ir_control/boards/{board_id}"
+    name = "api:vda_ir_control:board"
+    requires_auth = True
+
+    async def put(self, request, board_id):
+        """Update a board's configuration (e.g., board_type)."""
+        hass = request.app["hass"]
+        storage = get_storage(hass)
+
+        try:
+            data = await request.json()
+        except Exception:
+            return self.json({"error": "Invalid JSON"}, status_code=400)
+
+        # Get existing board config or create one
+        board = await storage.async_get_board(board_id)
+        if board is None:
+            # Get board info from coordinator
+            coord = None
+            for entry_id, c in hass.data.get(DOMAIN, {}).items():
+                if entry_id == "storage":
+                    continue
+                if hasattr(c, "board_id") and c.board_id == board_id:
+                    coord = c
+                    break
+
+            if coord is None:
+                return self.json({"error": "Board not found"}, status_code=404)
+
+            # Create new BoardConfig
+            from .models import BoardConfig
+            board = BoardConfig(
+                board_id=board_id,
+                board_name=coord.board_info.get("board_name", board_id),
+                ip_address=coord.ip_address,
+                mac_address=coord.mac_address,
+                board_type=data.get("board_type", "poe_iso"),
+            )
+        else:
+            # Update existing board
+            if "board_type" in data:
+                board.board_type = data["board_type"]
+
+        await storage.async_save_board(board)
+
+        return self.json({
+            "board_id": board.board_id,
+            "board_type": board.board_type,
+            "success": True,
         })
 
 
@@ -375,17 +439,29 @@ class VDAIRGPIOPinsView(HomeAssistantView):
     requires_auth = True
 
     async def get(self, request):
-        """Get all available GPIO pins for ESP32-POE-ISO."""
-        # Get query params for filtering
+        """Get all available GPIO pins for ESP32 boards.
+
+        Query params:
+            board_type: "poe_iso" (default) or "devkit"
+            for_input: "true" to filter for input-capable pins
+            for_output: "true" to filter for output-capable pins
+        """
+        # Get board type - defaults to poe_iso for backwards compatibility
+        board_type = request.query.get("board_type", "poe_iso")
         for_input = request.query.get("for_input", "").lower() == "true"
         for_output = request.query.get("for_output", "").lower() == "true"
 
         if for_input or for_output:
-            pins = get_available_ir_pins(for_input=for_input, for_output=for_output)
+            pins = get_available_ir_pins(
+                for_input=for_input, for_output=for_output, board_type=board_type
+            )
         else:
-            pins = list(ESP32_POE_ISO_PINS.values())
+            pins = get_all_pins_for_board(board_type)
+
+        reserved = get_reserved_pins_for_board(board_type)
 
         return self.json({
+            "board_type": board_type,
             "pins": [
                 {
                     "gpio": p.gpio,
@@ -402,10 +478,10 @@ class VDAIRGPIOPinsView(HomeAssistantView):
                     "gpio": gpio,
                     "reason": reason,
                 }
-                for gpio, reason in sorted(ESP32_POE_ISO_RESERVED.items())
+                for gpio, reason in sorted(reserved.items())
             ],
             "total_available": len(pins),
-            "total_reserved": len(ESP32_POE_ISO_RESERVED),
+            "total_reserved": len(reserved),
         })
 
 
@@ -1664,6 +1740,7 @@ class VDAIRHADeviceView(HomeAssistantView):
         device.matrix_device_id = data.get("matrix_device_id", device.matrix_device_id)
         device.matrix_device_type = data.get("matrix_device_type", device.matrix_device_type)
         device.matrix_port = data.get("matrix_port", device.matrix_port)
+        device.media_player_entity_id = data.get("media_player_entity_id", device.media_player_entity_id)
 
         if "device_family" in data:
             device.device_family = HADeviceFamily(data["device_family"])
@@ -1812,6 +1889,7 @@ async def async_setup_api(hass: HomeAssistant) -> None:
     """Set up the REST API."""
     # IR device endpoints
     hass.http.register_view(VDAIRBoardsView())
+    hass.http.register_view(VDAIRBoardView())
     hass.http.register_view(VDAIRProfilesView())
     hass.http.register_view(VDAIRProfileView())
     hass.http.register_view(VDAIRDevicesView())

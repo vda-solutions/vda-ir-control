@@ -661,6 +661,99 @@ class HARemoteDevice:
         )
 
 
+# ============================================================================
+# SERIAL DEVICE PROFILE SUPPORT (Community Serial Profiles)
+# ============================================================================
+
+
+@dataclass
+class SerialDeviceProfile:
+    """A serial device profile containing pre-configured commands for a device model.
+
+    Similar to DeviceProfile for IR devices, this allows sharing working configurations
+    for serial-controlled devices like HDMI matrices, projectors, displays, etc.
+    """
+    profile_id: str               # Unique ID, e.g., "epson_home_cinema_projector"
+    name: str                     # e.g., "Epson Home Cinema Projector (RS232)"
+    manufacturer: str = ""        # e.g., "Epson"
+    model: str = ""               # e.g., "Home Cinema 2350"
+    device_type: DeviceType = DeviceType.CUSTOM
+
+    # Serial configuration defaults
+    baud_rate: int = 9600
+    data_bits: int = 8
+    stop_bits: int = 1
+    parity: str = "N"
+
+    # Commands for this device
+    commands: Dict[str, DeviceCommand] = field(default_factory=dict)
+
+    # Global response patterns that apply to all commands
+    global_response_patterns: List[ResponsePattern] = field(default_factory=list)
+
+    # For HDMI matrices
+    routing_template: str = ""    # e.g., "s in {input} av out {output}!"
+    query_template: str = ""      # e.g., "r av out {output}!"
+    default_inputs: int = 0       # Default number of matrix inputs
+    default_outputs: int = 0      # Default number of matrix outputs
+
+    def add_command(self, command: DeviceCommand) -> None:
+        """Add a command to this profile."""
+        self.commands[command.command_id] = command
+
+    def get_command(self, command_id: str) -> Optional[DeviceCommand]:
+        """Get a command by ID."""
+        return self.commands.get(command_id)
+
+    def to_dict(self) -> dict:
+        return {
+            "profile_id": self.profile_id,
+            "name": self.name,
+            "manufacturer": self.manufacturer,
+            "model": self.model,
+            "device_type": self.device_type.value,
+            "baud_rate": self.baud_rate,
+            "data_bits": self.data_bits,
+            "stop_bits": self.stop_bits,
+            "parity": self.parity,
+            "commands": {k: v.to_dict() for k, v in self.commands.items()},
+            "global_response_patterns": [p.to_dict() for p in self.global_response_patterns],
+            "routing_template": self.routing_template,
+            "query_template": self.query_template,
+            "default_inputs": self.default_inputs,
+            "default_outputs": self.default_outputs,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "SerialDeviceProfile":
+        commands = {}
+        for k, v in data.get("commands", {}).items():
+            commands[k] = DeviceCommand.from_dict(v)
+
+        patterns = [
+            ResponsePattern.from_dict(p)
+            for p in data.get("global_response_patterns", [])
+        ]
+
+        return cls(
+            profile_id=data["profile_id"],
+            name=data["name"],
+            manufacturer=data.get("manufacturer", ""),
+            model=data.get("model", ""),
+            device_type=DeviceType(data.get("device_type", "custom")),
+            baud_rate=data.get("baud_rate", 9600),
+            data_bits=data.get("data_bits", 8),
+            stop_bits=data.get("stop_bits", 1),
+            parity=data.get("parity", "N"),
+            commands=commands,
+            global_response_patterns=patterns,
+            routing_template=data.get("routing_template", ""),
+            query_template=data.get("query_template", ""),
+            default_inputs=data.get("default_inputs", 0),
+            default_outputs=data.get("default_outputs", 0),
+        )
+
+
 @dataclass
 class DeviceGroupMember:
     """A member device in a group."""

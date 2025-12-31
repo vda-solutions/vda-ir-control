@@ -30,6 +30,7 @@ from .ir_profiles import (
     get_available_device_types,
 )
 from .profile_manager import get_profile_manager
+from .serial_profile_manager import get_serial_profile_manager
 from .models import (
     SerialDevice,
     SerialConfig,
@@ -1007,6 +1008,192 @@ class VDAIRAllProfilesView(HomeAssistantView):
 
 
 # ============================================================================
+# SERIAL DEVICE PROFILE API ENDPOINTS
+# ============================================================================
+
+
+class VDAIRSerialProfilesView(HomeAssistantView):
+    """API endpoint for serial device profiles."""
+
+    url = "/api/vda_ir_control/serial_profiles"
+    name = "api:vda_ir_control:serial_profiles"
+    requires_auth = True
+
+    async def get(self, request):
+        """Get all serial profiles (built-in + community)."""
+        hass = request.app["hass"]
+        manager = get_serial_profile_manager(hass)
+        await manager.async_load()
+
+        profiles = manager.get_all_profiles()
+
+        # Get counts by source
+        builtin_count = len(manager.get_all_builtin_profiles())
+        community_count = len(manager.get_all_community_profiles())
+
+        return self.json({
+            "profiles": profiles,
+            "total": len(profiles),
+            "builtin_count": builtin_count,
+            "community_count": community_count,
+            "sync_status": manager.get_sync_status(),
+        })
+
+
+class VDAIRSerialProfileView(HomeAssistantView):
+    """API endpoint for a single serial profile."""
+
+    url = "/api/vda_ir_control/serial_profiles/{profile_id}"
+    name = "api:vda_ir_control:serial_profile"
+    requires_auth = True
+
+    async def get(self, request, profile_id):
+        """Get a specific serial profile by ID."""
+        hass = request.app["hass"]
+        manager = get_serial_profile_manager(hass)
+        await manager.async_load()
+
+        profile = manager.get_profile(profile_id)
+        if profile is None:
+            return self.json({"error": "Profile not found"}, status_code=404)
+
+        return self.json(profile)
+
+
+class VDAIRSerialProfileApplyView(HomeAssistantView):
+    """API endpoint for applying a serial profile to a device."""
+
+    url = "/api/vda_ir_control/serial_profiles/{profile_id}/apply"
+    name = "api:vda_ir_control:serial_profile_apply"
+    requires_auth = True
+
+    async def get(self, request, profile_id):
+        """Get profile data formatted for applying to a new device."""
+        hass = request.app["hass"]
+        manager = get_serial_profile_manager(hass)
+        await manager.async_load()
+
+        apply_data = manager.apply_profile_to_device(profile_id)
+        if apply_data is None:
+            return self.json({"error": "Profile not found"}, status_code=404)
+
+        return self.json({
+            "profile_id": profile_id,
+            **apply_data,
+        })
+
+
+class VDAIRCommunitySerialProfilesView(HomeAssistantView):
+    """API endpoint for community serial profiles."""
+
+    url = "/api/vda_ir_control/community_serial_profiles"
+    name = "api:vda_ir_control:community_serial_profiles"
+    requires_auth = True
+
+    async def get(self, request):
+        """Get available and downloaded community serial profiles."""
+        hass = request.app["hass"]
+        manager = get_serial_profile_manager(hass)
+        await manager.async_load()
+
+        status_filter = request.query.get("status", "available")
+
+        # Get downloaded profiles
+        downloaded = manager.get_all_community_profiles()
+        downloaded_ids = {p["profile_id"] for p in downloaded}
+
+        if status_filter == "downloaded":
+            return self.json({
+                "profiles": downloaded,
+                "total": len(downloaded),
+                "status": "downloaded",
+            })
+
+        # Fetch manifest for available profiles
+        manifest_result = await manager.async_fetch_manifest()
+        available = manifest_result.get("available_profiles", [])
+
+        # Mark which are downloaded
+        for profile in available:
+            profile_id = profile.get("profile_id") or profile.get("id")
+            profile["downloaded"] = profile_id in downloaded_ids
+
+        sync_status = manager.get_sync_status()
+
+        return self.json({
+            "profiles": available,
+            "total": len(available),
+            "status": "available",
+            "downloaded_count": len(downloaded),
+            "manifest_version": manifest_result.get("manifest_version"),
+            "last_sync": sync_status.get("last_sync"),
+            "repository_url": sync_status.get("repository_url"),
+        })
+
+
+class VDAIRSyncSerialProfilesView(HomeAssistantView):
+    """API endpoint for syncing serial profile manifest from GitHub."""
+
+    url = "/api/vda_ir_control/sync_serial_profiles"
+    name = "api:vda_ir_control:sync_serial_profiles"
+    requires_auth = True
+
+    async def post(self, request):
+        """Fetch the manifest from GitHub."""
+        hass = request.app["hass"]
+        manager = get_serial_profile_manager(hass)
+
+        _LOGGER.info("Fetching community serial profile manifest")
+        result = await manager.async_fetch_manifest()
+
+        return self.json(result)
+
+    async def get(self, request):
+        """Get sync status without triggering a sync."""
+        hass = request.app["hass"]
+        manager = get_serial_profile_manager(hass)
+        await manager.async_load()
+
+        return self.json(manager.get_sync_status())
+
+
+class VDAIRDownloadSerialProfileView(HomeAssistantView):
+    """API endpoint for downloading a specific serial profile."""
+
+    url = "/api/vda_ir_control/download_serial_profile/{profile_id}"
+    name = "api:vda_ir_control:download_serial_profile"
+    requires_auth = True
+
+    async def post(self, request, profile_id):
+        """Download a specific profile from GitHub."""
+        hass = request.app["hass"]
+        manager = get_serial_profile_manager(hass)
+
+        _LOGGER.info("Downloading community serial profile: %s", profile_id)
+        result = await manager.async_download_profile(profile_id)
+
+        return self.json(result)
+
+
+class VDAIRDeleteSerialProfileView(HomeAssistantView):
+    """API endpoint for deleting a downloaded serial profile."""
+
+    url = "/api/vda_ir_control/delete_serial_profile/{profile_id}"
+    name = "api:vda_ir_control:delete_serial_profile"
+    requires_auth = True
+
+    async def delete(self, request, profile_id):
+        """Delete a downloaded serial profile."""
+        hass = request.app["hass"]
+        manager = get_serial_profile_manager(hass)
+
+        _LOGGER.info("Deleting community serial profile: %s", profile_id)
+        result = await manager.async_delete_profile(profile_id)
+
+        return self.json(result)
+
+
+# ============================================================================
 # SERIAL DEVICE API ENDPOINTS
 # ============================================================================
 
@@ -1911,6 +2098,15 @@ async def async_setup_api(hass: HomeAssistant) -> None:
     hass.http.register_view(VDAIRDeleteCommunityProfileView())
     hass.http.register_view(VDAIRExportProfileView())
     hass.http.register_view(VDAIRAllProfilesView())
+
+    # Serial profile endpoints
+    hass.http.register_view(VDAIRSerialProfilesView())
+    hass.http.register_view(VDAIRSerialProfileView())
+    hass.http.register_view(VDAIRSerialProfileApplyView())
+    hass.http.register_view(VDAIRCommunitySerialProfilesView())
+    hass.http.register_view(VDAIRSyncSerialProfilesView())
+    hass.http.register_view(VDAIRDownloadSerialProfileView())
+    hass.http.register_view(VDAIRDeleteSerialProfileView())
 
     # Serial device endpoints
     hass.http.register_view(VDAIRSerialPortsView())

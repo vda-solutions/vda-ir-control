@@ -252,20 +252,42 @@ class SerialDeviceCoordinator(DataUpdateCoordinator[DeviceState]):
     async def _listen_serial(self) -> None:
         """Background task to listen for serial responses (direct mode only)."""
         _LOGGER.debug("Starting serial listener for %s", self._device.name)
+        buffer = b""
 
         while not self._shutdown and self._reader:
             try:
-                # Read data with timeout
+                # Read available data (don't wait for newline - some devices use other terminators)
                 data = await asyncio.wait_for(
-                    self._reader.readline(),
+                    self._reader.read(1024),
                     timeout=60.0,
                 )
 
                 if data:
-                    await self._handle_received_data(data)
+                    buffer += data
+                    # Check for complete responses (newline, CR, or ! terminated)
+                    while b"\n" in buffer or b"\r" in buffer or b"!" in buffer:
+                        # Find the first terminator
+                        end_idx = -1
+                        for term in [b"\n", b"\r", b"!"]:
+                            idx = buffer.find(term)
+                            if idx >= 0 and (end_idx < 0 or idx < end_idx):
+                                end_idx = idx
+
+                        if end_idx >= 0:
+                            # Extract complete response (include terminator)
+                            response = buffer[:end_idx + 1]
+                            buffer = buffer[end_idx + 1:]
+                            # Skip empty responses (just terminators)
+                            if response.strip():
+                                await self._handle_received_data(response)
+                        else:
+                            break
 
             except asyncio.TimeoutError:
-                # No data received, connection still alive
+                # No data received, flush any partial buffer
+                if buffer.strip():
+                    await self._handle_received_data(buffer)
+                    buffer = b""
                 continue
             except asyncio.CancelledError:
                 _LOGGER.debug("Serial listener cancelled for %s", self._device.name)

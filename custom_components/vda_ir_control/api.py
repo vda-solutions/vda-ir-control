@@ -509,7 +509,7 @@ class VDAIRPortAssignmentsView(HomeAssistantView):
                 assignments[port].append({
                     "device_id": device.device_id,
                     "name": device.name,
-                    "profile_id": device.profile_id,
+                    "profile_id": device.device_profile_id,
                     "location": device.location,
                 })
 

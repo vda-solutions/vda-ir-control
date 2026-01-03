@@ -744,7 +744,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
                 ir_code_data = codes[command]
                 protocol = builtin_profile.get("protocol", "NEC")
                 raw_data = None
-                frequency = None
+                frequency = builtin_profile.get("frequency", 38000)
             else:
                 raise ServiceValidationError(f"Command '{command}' not found in built-in profile")
 
@@ -771,7 +771,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
                 ir_code_data = codes[command]
                 protocol = community_profile.get("protocol", "NEC")
                 raw_data = None
-                frequency = None
+                frequency = community_profile.get("frequency", 38000)
             else:
                 raise ServiceValidationError(f"Command '{command}' not found in community profile")
 

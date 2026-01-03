@@ -13,6 +13,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN
 from .storage import get_storage
 from .ir_profiles import get_profile_by_id as get_builtin_profile
+from .profile_manager import get_profile_manager
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -138,12 +139,21 @@ async def async_setup_entry(
 
 
 async def _get_device_commands(hass: HomeAssistant, profile_id: str) -> dict:
-    """Get commands from a profile (builtin or custom)."""
+    """Get commands from a profile (builtin, community, or custom)."""
     if profile_id.startswith("builtin:"):
         builtin_id = profile_id[8:]
+        # First check builtin profiles
         profile = get_builtin_profile(builtin_id)
         if profile:
-            # Return codes with protocol info
+            return {
+                cmd: {"code": code, "protocol": profile.get("protocol", "NEC")}
+                for cmd, code in profile.get("codes", {}).items()
+            }
+        # If not found in builtin, check community profiles
+        profile_manager = get_profile_manager(hass)
+        await profile_manager.async_load()
+        profile = profile_manager.get_community_profile(builtin_id)
+        if profile:
             return {
                 cmd: {"code": code, "protocol": profile.get("protocol", "NEC")}
                 for cmd, code in profile.get("codes", {}).items()
@@ -164,7 +174,14 @@ async def _get_device_type(hass: HomeAssistant, profile_id: str) -> str:
     """Get device type from a profile."""
     if profile_id.startswith("builtin:"):
         builtin_id = profile_id[8:]
+        # First check builtin profiles
         profile = get_builtin_profile(builtin_id)
+        if profile:
+            return profile.get("device_type", "tv")
+        # If not found in builtin, check community profiles
+        profile_manager = get_profile_manager(hass)
+        await profile_manager.async_load()
+        profile = profile_manager.get_community_profile(builtin_id)
         if profile:
             return profile.get("device_type", "tv")
         return "tv"

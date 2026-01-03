@@ -1996,6 +1996,98 @@ class VDAIRHADeviceFamiliesView(HomeAssistantView):
         return self.json(families)
 
 
+class VDAIRMatrixRoutingView(HomeAssistantView):
+    """API endpoint for matrix routing with state tracking."""
+
+    url = "/api/vda_ir_control/matrix/{matrix_id}/route"
+    name = "api:vda_ir_control:matrix_route"
+    requires_auth = True
+
+    async def post(self, request, matrix_id):
+        """Route a matrix input to an output and update state."""
+        from .sensor import async_update_matrix_routing
+
+        hass = request.app["hass"]
+        storage = get_storage(hass)
+
+        try:
+            data = await request.json()
+        except Exception:
+            return self.json({"error": "Invalid JSON"}, status_code=400)
+
+        input_index = data.get("input")
+        output_index = data.get("output")
+
+        if input_index is None or output_index is None:
+            return self.json({"error": "Must provide input and output"}, status_code=400)
+
+        # Get the matrix device
+        device = await storage.async_get_serial_device(matrix_id)
+        if device is None:
+            return self.json({"error": "Matrix not found"}, status_code=404)
+
+        if not device.routing_template:
+            return self.json({"error": "Matrix has no routing template"}, status_code=400)
+
+        # Build the routing command
+        routing_cmd = device.routing_template.replace("{input}", str(input_index)).replace("{output}", str(output_index))
+
+        # Get or setup coordinator
+        coordinator = get_serial_coordinator(hass, matrix_id)
+        if coordinator is None:
+            coordinator = await async_setup_serial_coordinator(hass, device)
+
+        # Send the command
+        try:
+            response = await coordinator.async_send_raw(
+                routing_cmd,
+                "text",
+                "cr",
+                wait_for_response=True,
+                response_timeout=2.0,
+            )
+
+            # Update the sensor state
+            async_update_matrix_routing(hass, matrix_id, output_index, input_index)
+
+            return self.json({
+                "success": True,
+                "matrix_id": matrix_id,
+                "input": input_index,
+                "output": output_index,
+                "command": routing_cmd,
+                "response": response,
+            })
+        except Exception as err:
+            return self.json({"error": str(err)}, status_code=500)
+
+    async def get(self, request, matrix_id):
+        """Get current routing state for all outputs."""
+        from .sensor import get_matrix_routing
+
+        hass = request.app["hass"]
+        storage = get_storage(hass)
+
+        device = await storage.async_get_serial_device(matrix_id)
+        if device is None:
+            return self.json({"error": "Matrix not found"}, status_code=404)
+
+        routing = {}
+        for output in device.matrix_outputs:
+            current_input = get_matrix_routing(hass, matrix_id, output.index)
+            routing[output.index] = {
+                "output_index": output.index,
+                "output_name": output.name,
+                "output_device_id": output.device_id,
+                "current_input": current_input,
+            }
+
+        return self.json({
+            "matrix_id": matrix_id,
+            "routing": routing,
+        })
+
+
 class VDAIRHAEntitiesView(HomeAssistantView):
     """View for discovering available HA remote/media_player entities."""
 
@@ -2128,5 +2220,8 @@ async def async_setup_api(hass: HomeAssistant) -> None:
     hass.http.register_view(VDAIRHADeviceCommandsView())
     hass.http.register_view(VDAIRHADeviceFamiliesView())
     hass.http.register_view(VDAIRHAEntitiesView())
+
+    # Matrix routing endpoints
+    hass.http.register_view(VDAIRMatrixRoutingView())
 
     _LOGGER.info("VDA IR Control REST API registered")

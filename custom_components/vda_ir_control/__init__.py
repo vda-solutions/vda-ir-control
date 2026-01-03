@@ -17,10 +17,11 @@ from .services import async_setup_services
 from .api import async_setup_api
 from .storage import get_storage
 from .profile_manager import get_profile_manager
+from .sensor import async_setup_matrix_sensors
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
-PLATFORMS: Final = [Platform.SWITCH, Platform.BUTTON, Platform.SELECT]
+PLATFORMS: Final = [Platform.SWITCH, Platform.BUTTON, Platform.SELECT, Platform.SENSOR]
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
@@ -40,6 +41,9 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
     # Register REST API
     await async_setup_api(hass)
+
+    # Set up matrix routing sensors (delayed to ensure storage is ready)
+    hass.async_create_task(async_setup_matrix_sensors(hass))
 
     return True
 

@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Home Assistant test instance (exclude all runtime data)
+config/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+*.log.*
+/tmp/
+
+# Environment
+.env
+.env.local
+
+# Test files
+/nohup.out
+
+# Mosquitto data
+mosquitto/data/
+
+# PlatformIO build artifacts
+firmware/.pio/

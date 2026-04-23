@@ -1,0 +1,79 @@
+send_ir_code:
+  name: Send IR Code
+  description: Send an IR code to a specific board output
+  fields:
+    board_id:
+      name: Board ID
+      description: The ID of the IR controller board
+      required: true
+      selector:
+        text:
+    output:
+      name: Output
+      description: The output number (1-30)
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 30
+          mode: box
+    code:
+      name: IR Code
+      description: The IR code to send (raw hex or protocol string)
+      required: true
+      selector:
+        text:
+
+test_output:
+  name: Test Output
+  description: Send a test signal to an IR output
+  fields:
+    board_id:
+      name: Board ID
+      description: The ID of the IR controller board
+      required: true
+      selector:
+        text:
+    output:
+      name: Output
+      description: The output number (1-30)
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 30
+          mode: box
+    duration_ms:
+      name: Duration
+      description: Duration of the test signal in milliseconds (100-5000)
+      required: false
+      default: 500
+      selector:
+        number:
+          min: 100
+          max: 5000
+          unit_of_measurement: ms
+          mode: slider
+
+discover_boards:
+  name: Discover Boards
+  description: Scan the network for IR controller boards
+  fields:
+    subnet:
+      name: Subnet
+      description: The subnet to scan (e.g., 192.168.1)
+      required: false
+      default: "192.168.1"
+      selector:
+        text:
+
+get_board_status:
+  name: Get Board Status
+  description: Get the current status of an IR controller board
+  fields:
+    board_id:
+      name: Board ID
+      description: The ID of the IR controller board
+      required: true
+      selector:
+        text:
